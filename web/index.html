@@ -41,7 +41,7 @@
         <label class="f">smoke model (local, fast)<input type="text" x-model="settings.model_smoke"></label>
         <label class="f">inference model (local)<input type="text" x-model="settings.model_infer"></label>
         <label class="f">active model (default for all phases)<input type="text" x-model="settings.model_active"></label>
-        <label class="f">device<select x-model="settings.device"><option>auto</option><option>cpu</option><option>mps</option><option>cuda</option></select></label>
+        <label class="f">device<input type="text" list="device-options" x-model="settings.device"><datalist id="device-options"><option value="auto"></option><option value="cpu"></option><option value="mps"></option><option value="cuda"></option><template x-for="i in 8"><option :value="'cuda:'+(i-1)"></option></template></datalist></label>
         <label class="f">language<input type="text" x-model="settings.language" style="min-width:60px;width:60px"></label>
       </div>
       <div class="row" style="margin-top:10px">
@@ -72,6 +72,12 @@
       </div>
       <p class="small muted" style="margin-top:12px">Everything here is also available as <code>uv run bw run &lt;type&gt; '&lt;json&gt;'</code>. Runs live under <code>data/runs/&lt;id&gt;/</code>; the UI just reads them.</p>
     </div>
+  </div>
+  <div class="card">
+    <h3>Server setup (no experimental phases)</h3>
+    <p class="small muted">After corpus import: validate CUDA and the local checkpoint, save recording-disjoint cohorts, and write configs. This does not run Phase 1 or any later phase. Re-run after adding Explore samples to refresh cohorts.</p>
+    <div class="cfg" data-cfg="setup_scale"></div>
+    <button class="btn" style="margin-top:8px" @click="launch('setup_scale')">Check server &amp; prepare configs only</button>
   </div>
   <div class="card">
     <h3>Flow</h3>
@@ -128,6 +134,13 @@
         </template>
       </div>
     </div>
+  </div>
+
+  <div class="card">
+    <h3>Local aligned manifests (PocketTTS)</h3>
+    <p class="small muted">Original transcript digits only; aligned slice boundaries. Hebrew sources only, no normalized variants.</p>
+    <div class="cfg" data-cfg="corpus_import_pockettts"></div>
+    <button class="btn" style="margin-top:8px" @click="launch('corpus_import_pockettts')">Import aligned slices</button>
   </div>
 
   <div class="card">
@@ -516,6 +529,7 @@
     <div class="cfg" data-cfg="phase2"></div>
     <div class="row" style="margin-top:8px">
       <button class="btn" :disabled="!p2.usable" @click="launchP2().then(j=>selectP2(j.id))">Run phase 2</button>
+      <button class="btn sec" :disabled="!p2.usable" @click="launch('phase2_benchmark', {...parseCfg('phase2'), phase1_runs:p2.chosen, verdicts:p2.verdicts, benchmark_points:2})">Benchmark GPU capture (2 points)</button>
       <button class="btn sec" @click="cfgs.phase2.model=settings.model_smoke;cfgs.phase2.rounds=300">smoke preset</button>
     </div>
   </div>

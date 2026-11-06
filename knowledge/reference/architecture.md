@@ -16,11 +16,13 @@ src/bwhisper/
   model.py         load Whisper, digit-token set, explicit greedy decoder (parity-tested against generate)
   hebrew_numbers.py number-word lexicon (prefix stripping), digit runs, word diff, auto verdicts
   audio.py         ffmpeg decode/crop -> 16 kHz mono
-  corpus/          store.py (SQLite), hf_cache.py (offline source), explore.py (explore.ivrit.ai), jobs.py
+  corpus/          store.py (SQLite), hf_cache.py, explore.py, pockettts.py (aligned local manifests), jobs.py
+  setup_scale.py   hardware/model preflight, frozen recording cohorts, configs only (no phase submission)
   jobs.py          job registry/runner; run dir = data/runs/<id>/{job.json,log.txt,*.jsonl,...}
   phase1.py        Phase 1 (v1 first-digit rewind, v2 span mode: StyleTokens, divergence region, paired transcripts)
   phase1_5.py      co-occurrence mining around digit spans, edit patterns, satellites.json
   phase2.py        weight-space nudges; point_objective (mass | pair | seq_contrast | auto) shared by all phases
+  phase2_capture.py device-native linear sparse selection, synchronized timings, registered CPU/GPU benchmark job
   phase2n.py       component attribution (neurons, heads, residual), BH-FDR + voting, translation to weight edits
   budget.py        budget sweep (energy, self effect, held-out transfer vs k)
   phase3.py        control experiments (applies any candidates_<type>.npz)
@@ -39,6 +41,12 @@ data/              gitignored: corpus.db, audio, runs, secrets, settings.json
 `@register(name, kind, defaults)` adds a job type. `kind='gpu'` jobs run one at a time, `'io'` jobs on a separate pool.
 Each run writes `job.json` (state), `log.txt`, and phase outputs; the UI polls `/api/jobs` and reads the same files, so a run started
 from the CLI shows up in the UI and vice versa. Job state survives restarts (active jobs are marked `interrupted`).
+
+Phase 1 can use explicit `devices` for one replica/shard per GPU inside its single
+registered job; all other GPU phases still use one device. See [server setup](/reference/server-setup.md).
+Phase 2 linear CUDA capture now keeps dense gradients/selection on device and can
+resume compatible stopped captures; aggregation is still CPU-only. See
+[GPU capture and benchmarking](/reference/phase2-gpu-capture.md).
 
 # Decoder
 

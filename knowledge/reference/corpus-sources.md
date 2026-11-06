@@ -41,6 +41,18 @@ Datasets already in `~/.cache/huggingface/hub` (`yoad/knesset-plenums`, `yoad/kn
 `transcript.aligned.json`. The importer builds windows of merged adjacent segments (6-25 s) around segments containing digits,
 crops them with ffmpeg to 16 kHz wav and stores them in `data/corpus/`. Deterministic with `seed`. Used for the first smoke run.
 
+# PocketTTS aligned-manifest source (`pockettts_*`)
+
+Job `corpus_import_pockettts` reads only plenum, committee and crowd_transcribe_v5
+aligned train/valid manifests from `/mlspeech/hebrew/pockettts-data`. Digit eligibility
+comes from recovered pre-normalization text, NOT the prepared `transcript`.
+Knesset originals are recorded in inverse `alt_words.norms[*].replace` spans;
+older crowd rows join `clip` to original source-index `text`. See the
+[provenance correction](/findings/2026-11-06-original-text-correction.md). It crops
+the refined `start` / `duration` and records recording identity for held-out splitting.
+See [A40 server preparation](/reference/server-setup.md) for configuration, data
+shortfall reporting, setup-only preflight and the explicit phase execution gate.
+
 # Caveats
 
 * Reference digit usage differs by source; the model inherits that inconsistency.

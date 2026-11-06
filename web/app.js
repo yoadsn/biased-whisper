@@ -1,4 +1,5 @@
 const OPTIONS = {
+  capture_backend: ['auto', 'device', 'reference'],
   objective: ['auto', 'seq_contrast', 'mass', 'pair', 'mass_vs_card'],
   nudge_mode: ['linear', 'iterative'],
   param_filter: ['all_no_embed', 'all', 'decoder_no_embed', 'decoder', 'encoder', 'bitfit'],
@@ -8,6 +9,8 @@ const OPTIONS = {
   mode: ['range', 'episode'],
 };
 const HELP = {
+  capture_backend: 'auto uses GPU-native sparse selection for linear CUDA capture; reference keeps the original CPU path',
+  resume_run: 'stopped Phase 2 run whose complete compatible captures should be reused (original files are preserved)',
   limit: 'how many corpus samples to process',
   mistake_prob: 'target prob = 1 - this (the nudge goal)',
   sample_pct: 'upstream params sample pct: top-% of each sample\'s nudge kept',
@@ -30,10 +33,11 @@ const HELP = {
   seeds: 'comma-separated shuffle seeds for explore.ivrit.ai search',
   per_seed: 'max samples to pull per seed before advancing to the next seed',
   target: 'total new explore samples to add across seeds',
-  per_episode: 'max distinct non-adjacent segments per episode',
+  per_episode: 'max segments per episode across seeds, including existing corpus samples',
   pad: 'seconds of audio padding before/after segment boundaries',
   mode: 'range = HTTP Range Ogg page windows; episode = full episode download',
   workers: 'parallel episode worker threads (1..8)',
+  devices: 'Phase 1 model replicas, e.g. cuda:0, cuda:1 (empty = active device)',
 };
 
 const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -109,7 +113,7 @@ function app() {
 
     // ---------------- config forms
     fields(type) { return Object.keys(this.cfgs[type] || {}).filter(k => !this.hidden(type).includes(k)); },
-    hidden(type) { return { phase1: ['sample_ids'], phase2: ['phase1_runs', 'verdicts'], budget_sweep: ['phase1_runs'], phase3: ['phase2_run'] }[type] || []; },
+    hidden(type) { return { phase1: ['sample_ids'], phase2: ['phase1_runs', 'verdicts'], budget_sweep: ['phase1_runs'], phase3: ['phase2_run', 'eval_sample_ids'] }[type] || []; },
     kind(type, k) {
       const d = this.jobTypes[type].defaults[k], v = this.cfgs[type][k];
       if (OPTIONS[k]) return 'select';

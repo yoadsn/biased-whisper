@@ -65,6 +65,7 @@ def save_settings(patch: dict[str, Any]) -> dict[str, Any]:
 # every job stores the full resolved config next to its results.
 PHASE1_DEFAULTS: dict[str, Any] = {
     "model": None,  # None -> settings.model_active
+    "devices": [],  # explicit CUDA devices -> one independent model replica per device
     "sample_ids": None,  # explicit corpus ids, or None to take `limit` samples
     "limit": 50,
     "require_ref_digits": True,
@@ -76,6 +77,9 @@ PHASE1_DEFAULTS: dict[str, Any] = {
 
 PHASE2_DEFAULTS: dict[str, Any] = {
     "model": None,
+    "capture_backend": "auto",  # auto: device-native linear capture on CUDA; reference: original CPU path
+    "resume_run": None,  # reuse complete compatible captures from a stopped Phase 2 run
+    "release_unused_models": True,
     "phase1_runs": [],  # run ids supplying decision points
     "verdicts": ["cardinal", "human_good"],  # which phase-1 verdicts are usable
     "max_points": 100,
@@ -107,6 +111,7 @@ PHASE2_DEFAULTS: dict[str, Any] = {
 
 PHASE3_DEFAULTS: dict[str, Any] = {
     "model": None,
+    "eval_sample_ids": None,  # explicit recording-held-out cohort from setup_scale
     "phase2_run": None,
     "nudge_types": ["to_digits", "to_cardinal"],
     "strengths": [2.0, 5.0, 10.0, 20.0],

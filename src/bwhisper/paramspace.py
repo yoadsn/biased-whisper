@@ -78,8 +78,10 @@ class ParamSpace:
             p.requires_grad_(False)
             p.grad = None
 
-    def flat_grad(self) -> torch.Tensor:
-        parts = [(p.grad if p.grad is not None else torch.zeros_like(p)).detach().reshape(-1).float().cpu() for p in self.params]
+    def flat_grad(self, device: str | torch.device = "cpu") -> torch.Tensor:
+        """Pack gradients on the requested device; CPU remains the legacy default."""
+        parts = [(p.grad if p.grad is not None else torch.zeros_like(p)).detach().reshape(-1).float().to(device)
+                 for p in self.params]
         return torch.cat(parts)
 
     def zero_grad(self) -> None:

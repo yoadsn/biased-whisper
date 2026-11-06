@@ -16,6 +16,7 @@ from these; `uv run bw job-types` prints them.
 | key | default | meaning |
 |---|---|---|
 | `model` | active model | HF id or local path |
+| `devices` | [] | explicit CUDA device list for independent Phase 1 replicas; [] preserves single-device behavior |
 | `limit` / `sample_ids` | 50 / null | how many corpus samples (random) or an explicit id list |
 | `require_ref_digits` | true | only samples whose reference text has digits |
 | `max_new_tokens` | 96 | decode length cap |
@@ -36,6 +37,9 @@ from these; `uv run bw job-types` prints them.
 
 | key | default | brief's name / meaning |
 |---|---|---|
+| `capture_backend` | `auto` | device-native linear capture on CUDA; `reference` retains original CPU path; `device` explicitly chooses native selection |
+| `resume_run` | null | stopped compatible Phase 2 run whose complete captures are reused without modifying originals |
+| `release_unused_models` | true | evict cached replicas other than the active model |
 | `phase1_runs`, `verdicts` | - , cardinal + human_good | which decision points are used |
 | `max_points` | 100 | cap on decision points |
 | `objective` | `auto` | `auto` = `seq_contrast` for span-mode points (log P(digit-style span) - log P(word-style span), teacher forced), else `mass`; also `pair`, `mass_vs_card` |
@@ -87,5 +91,6 @@ Phase 3 uses its outputs with `phase2_run=<phase2n run>` and `nudge_types` from 
 | `stat` | `mean_all` | `mean_all`, `mean_present`, `median_present` |
 | `candidate_limit` | null | keep top-N candidates by votes |
 | `eval_limit` | 50 | held-out utterances |
+| `eval_sample_ids` | null | restrict to frozen recording-held-out IDs written by `setup_scale` |
 | `exclude_phase2_samples` | true | keep eval disjoint from fitting data |
 | `controls` | shuffled_values, random_indices | matched controls run for every nudge condition |

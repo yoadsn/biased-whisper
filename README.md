@@ -23,6 +23,21 @@ uv run python scripts/okf_lint.py           # validate knowledge/ OKF bundle
 
 ### CLI workflow
 
+**A40 server setup (data/preflight only):** see
+[`knowledge/reference/server-setup.md`](knowledge/reference/server-setup.md).
+
+```bash
+uv run bw run corpus_import_pockettts '{"limit":10000,"workers":8}'
+# Explore requires your authenticated local configuration first:
+uv run bw run corpus_fetch_explore '{"target":10000,"per_seed":500,"workers":8}'
+uv run bw run setup_scale '{}'
+```
+
+Setup writes frozen recording-disjoint cohorts and an eight-device Phase 1 config;
+it **does not start any experimental phase**. Wait for owner approval before the
+workflow below. Original-text digit availability may be below the requested local
+target; inventory files report the shortfall without using normalized variants.
+
 ```bash
 # 1. Import corpus clips containing numbers
 uv run bw corpus-import --limit 100

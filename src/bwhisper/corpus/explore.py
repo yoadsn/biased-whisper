@@ -524,6 +524,7 @@ def fetch_episodes_batch(
     should_stop: Callable[[], bool] = lambda: False,
     progress: Callable[[int, int], None] = lambda a, b: None,
     max_pages: int = 40,
+    episode_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Page through explore.ivrit.ai search results for `seed`, grouping by episode and
     running up to `workers` parallel episode workers (each with a persistent keep-alive
@@ -536,6 +537,7 @@ def fetch_episodes_batch(
     )
     ps = int(cfg.get("page_size") or 40)
     workers = max(1, min(8, int(workers)))
+    episode_counts = episode_counts if episode_counts is not None else {}
 
     added = 0
     dup = 0
@@ -632,12 +634,17 @@ def fetch_episodes_batch(
                 # Prepare episode batches needed to reach `n - added`
                 ep_tasks: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
                 queued_segs = 0
+                queued_by_episode: dict[str, int] = {}
                 need = n - added
 
                 for ep in episodes:
                     if queued_segs >= need:
                         break
                     episodes_seen += 1
+                    uuid = ep.get("uuid", "")
+                    remaining = per_episode - episode_counts.get(uuid, 0) - queued_by_episode.get(uuid, 0)
+                    if remaining <= 0:
+                        continue
                     all_cands = dedupe_episode_hits(ep, min_dur=min_dur, max_dur=max_dur, seen_keys=seen_keys)
                     fresh_cands: list[dict[str, Any]] = []
                     for cand in all_cands:
@@ -651,7 +658,7 @@ def fetch_episodes_batch(
                     chosen: list[dict[str, Any]] = []
                     selected_indices: list[int] = []
                     for cand in ordered:
-                        if len(chosen) >= per_episode or (queued_segs + len(chosen)) >= need:
+                        if len(chosen) >= remaining or (queued_segs + len(chosen)) >= need:
                             break
                         if selected_indices and any(abs(cand["segment_idx"] - idx) <= 1 for idx in selected_indices):
                             rem_non_adj = [
@@ -676,6 +683,7 @@ def fetch_episodes_batch(
                     if chosen:
                         ep_tasks.append((ep, chosen))
                         queued_segs += len(chosen)
+                        queued_by_episode[uuid] = queued_by_episode.get(uuid, 0) + len(chosen)
 
                 futures = [pool.submit(process_episode, ep, segs) for ep, segs in ep_tasks]
                 for fut in as_completed(futures):
@@ -708,6 +716,8 @@ def fetch_episodes_batch(
                         )
                         if ins is not None:
                             added += 1
+                            uuid = cand["uuid"]
+                            episode_counts[uuid] = episode_counts.get(uuid, 0) + 1
                             progress(added, n)
                         else:
                             dup += 1

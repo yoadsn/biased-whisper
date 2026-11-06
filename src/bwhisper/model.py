@@ -124,6 +124,23 @@ def unload_all() -> None:
         torch.cuda.empty_cache()
 
 
+def unload_unused(keep: Loaded) -> int:
+    """Release cached replicas other than the active GPU job's model."""
+    import gc
+
+    with _lock:
+        keys = [key for key, loaded in _cache.items() if loaded is not keep]
+        devices = {_cache[key].device for key in keys}
+        for key in keys:
+            del _cache[key]
+    gc.collect()
+    for device in devices:
+        if str(device).startswith("cuda") and torch.cuda.is_available():
+            with torch.cuda.device(device):
+                torch.cuda.empty_cache()
+    return len(keys)
+
+
 def features(L: Loaded, audio: np.ndarray) -> torch.Tensor:
     f = L.feature_extractor(audio, sampling_rate=SAMPLE_RATE, return_tensors="pt").input_features
     return f.to(L.device)

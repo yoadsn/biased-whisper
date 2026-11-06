@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 
 from . import model as M
@@ -214,7 +216,65 @@ def analyse_sample(L: M.Loaded, audio, max_new: int, style: StyleTokens | None =
 
 @register("phase1", kind="gpu", defaults=PHASE1_DEFAULTS)
 def run_phase1(ctx: Ctx, cfg: dict) -> dict:
-    L = M.load_model(cfg["model"], extra_digit_chars=cfg.get("extra_digit_chars", ""))
+    samples = select_samples(cfg)
+    devices = cfg.get("devices") or []
+    if not isinstance(devices, list) or len(set(devices)) != len(devices):
+        raise ValueError("devices must be a list of unique CUDA devices")
+    if devices:
+        import torch
+
+        available = {f"cuda:{i}" for i in range(torch.cuda.device_count())}
+        if set(devices) - available:
+            raise ValueError(f"requested devices unavailable: {set(devices) - available}")
+        if not samples:
+            raise ValueError("no samples selected")
+        devices = devices[:len(samples)]
+        counts = [0] * len(devices)
+        lock = threading.Lock()
+
+        class WorkerCtx:
+            def __init__(self, index):
+                self.index = index
+
+            def __getattr__(self, key):
+                return getattr(ctx, key)
+
+            def progress(self, done, total, message=None):
+                with lock:
+                    counts[self.index] = done
+                    ctx.progress(sum(counts), len(samples), message)
+
+        def worker(i):
+            return _run_samples(WorkerCtx(i), cfg, samples[i::len(devices)], devices[i])
+
+        ctx.log(f"parallel phase1: {len(devices)} independent replicas on {devices}")
+        with ThreadPoolExecutor(len(devices), thread_name_prefix="phase1-gpu") as pool:
+            summaries = list(pool.map(worker, range(len(devices))))
+        verdicts = Counter()
+        for summary in summaries:
+            verdicts.update(summary["verdicts"])
+        n_digits = sum(s["with_digits"] for s in summaries)
+        return {"samples": len(samples), "verdicts": dict(verdicts), "with_digits": n_digits,
+                "mean_p_digit_at_decision": sum((s["mean_p_digit_at_decision"] or 0) * s["with_digits"]
+                                                for s in summaries) / n_digits if n_digits else None,
+                "model": summaries[0]["model"], "devices": devices}
+    return _run_samples(ctx, cfg, samples)
+
+
+def select_samples(cfg: dict) -> list[dict]:
+    if cfg.get("sample_ids") is not None:
+        ids = [int(i) for i in cfg["sample_ids"]]
+        if not ids:
+            return []
+        samples = store.query(ids=ids, limit=10**6)
+        if {s["id"] for s in samples} != set(ids):
+            raise ValueError("some requested corpus samples do not exist")
+        return samples
+    return store.query(digits_only=cfg["require_ref_digits"], limit=int(cfg["limit"]), order="random")
+
+
+def _run_samples(ctx: Ctx, cfg: dict, samples: list[dict], device: str | None = None) -> dict:
+    L = M.load_model(cfg["model"], device=device, extra_digit_chars=cfg.get("extra_digit_chars", ""))
     ctx.log(f"model={L.name} device={L.device} digit_tokens={len(L.digit_ids)}")
     style = None
     if cfg.get("span_mode", True):
@@ -226,10 +286,6 @@ def run_phase1(ctx: Ctx, cfg: dict) -> dict:
         style = StyleTokens(L, sat)
         ctx.log(f"span mode: hyphen={len(style.hyphen)} prefix={len(style.prefix)} symbols={len(style.symbols)} "
                 f"satellites={'yes' if sat else 'none (built-in rules only)'}")
-    if cfg.get("sample_ids"):
-        samples = store.query(ids=[int(i) for i in cfg["sample_ids"]], limit=10**6)
-    else:
-        samples = store.query(digits_only=cfg["require_ref_digits"], limit=int(cfg["limit"]), order="random")
     ctx.log(f"{len(samples)} samples")
     verdicts: Counter = Counter()
     p_digits = []

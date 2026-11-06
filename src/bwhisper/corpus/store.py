@@ -65,13 +65,13 @@ def add_sample(
     """Insert; returns new id or None if (source, source_key) already exists."""
     c = conn()
     try:
-        cur = c.execute(
-            "INSERT INTO samples(source,source_key,text,duration,audio_path,start,end,ref_digits,meta,batch,created)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (source, source_key, text, duration, str(audio_path), start, end, digit_chars(text),
-             json.dumps(meta or {}, ensure_ascii=False), batch, time.time()),
-        )
-        c.commit()
+        with c:
+            cur = c.execute(
+                "INSERT INTO samples(source,source_key,text,duration,audio_path,start,end,ref_digits,meta,batch,created)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (source, source_key, text, duration, str(audio_path), start, end, digit_chars(text),
+                 json.dumps(meta or {}, ensure_ascii=False), batch, time.time()),
+            )
         return cur.lastrowid
     except sqlite3.IntegrityError:
         return None
@@ -135,6 +135,17 @@ def update_text(sample_id: int, text: str) -> None:
     c = conn()
     c.execute("UPDATE samples SET text=?, ref_digits=? WHERE id=?", (text, digit_chars(text), sample_id))
     c.commit()
+
+
+def update_references(updates: list[tuple[int, str, dict]]) -> None:
+    """Commit one short repair batch; never hold a write transaction while scanning."""
+    if not updates:
+        return
+    c = conn()
+    values = [(text, digit_chars(text), json.dumps(meta, ensure_ascii=False), sample_id)
+              for sample_id, text, meta in updates]
+    with c:
+        c.executemany("UPDATE samples SET text=?, ref_digits=?, meta=? WHERE id=?", values)
 
 
 def delete(sample_ids: list[int]) -> int:

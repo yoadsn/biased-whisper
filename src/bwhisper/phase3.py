@@ -88,7 +88,11 @@ def run_phase3(ctx: Ctx, cfg: dict) -> dict:
     if not cands:
         raise RuntimeError("no candidate sets to test")
 
-    pool = store.query(source=cfg.get("eval_source") or None, digits_only=bool(cfg["require_ref_digits"]), limit=10**6)
+    eval_ids = cfg.get("eval_sample_ids")
+    if eval_ids == []:
+        raise ValueError("explicit evaluation cohort is empty")
+    pool = store.query(source=cfg.get("eval_source") or None, ids=eval_ids,
+                       digits_only=bool(cfg["require_ref_digits"]), limit=10**6)
     if cfg["exclude_phase2_samples"]:
         pool = [s for s in pool if s["id"] not in p2_ids]
     rng.shuffle(pool)

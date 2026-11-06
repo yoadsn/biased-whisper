@@ -17,6 +17,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import shutil
+import time
 from pathlib import Path
 
 import numpy as np
@@ -27,8 +30,9 @@ from .aggregate import Aggregator, concentration, jaccard_topk, pick_threshold
 from .audio import load_audio
 from .config import PHASE2_DEFAULTS, RUNS_DIR
 from .corpus import store
-from .jobs import Ctx, register
+from .jobs import Ctx, read_jsonl, register
 from .paramspace import ParamSpace, group_of, tower_of
+from .phase2_capture import capture_sparse_linear, measured
 from .phase1 import decision_points
 
 NUDGES = ("to_digits", "to_cardinal")
@@ -73,14 +77,18 @@ def point_objective(L: M.Loaded, enc: torch.Tensor, pt: dict, kind: str) -> torc
     return objective(L, M.prefix_logits(L, enc, pt["prefix_ids"]), pt, kind)
 
 
-def _eval_grad(L, space: ParamSpace, audio, pt, kind: str):
+def _eval_grad(L, space: ParamSpace, audio, pt, kind: str, gradient_device="cpu", timings=None):
     space.zero_grad()
-    enc = M.encode(L, audio, grad=space.has_encoder)
-    with torch.enable_grad():
-        d = point_objective(L, enc, pt, kind)
-        d.backward()
-    g = space.flat_grad()
-    space.zero_grad()
+    try:
+        with measured(timings, "forward_backward_s", L.device):
+            enc = M.encode(L, audio, grad=space.has_encoder)
+            with torch.enable_grad():
+                d = point_objective(L, enc, pt, kind)
+                d.backward()
+        with measured(timings, "gradient_pack_s", L.device):
+            g = space.flat_grad(device=gradient_device)
+    finally:
+        space.zero_grad()
     return float(d.detach()), g
 
 
@@ -144,18 +152,105 @@ def select_top(n: torch.Tensor, space: ParamSpace, k: int, normalize: str):
     return top, n[top].numpy().astype(np.float32), rms
 
 
+def resume_captures(ctx: Ctx, cfg: dict, space: ParamSpace, model: str, pts: list[dict]) -> dict:
+    """Validate a stopped run, and expose only complete, readable point captures."""
+    rid = cfg.get("resume_run")
+    if not rid:
+        return {}
+    if not isinstance(rid, str) or Path(rid).name != rid or rid in (".", ".."):
+        raise ValueError("invalid resume_run")
+    source = RUNS_DIR / rid
+    job = json.loads((source / "job.json").read_text())
+    if job["type"] != "phase2" or job["status"] in ("running", "queued"):
+        raise ValueError("resume_run must be a stopped Phase 2 job")
+    old = job["config"]
+    execution = {"model", "resume_run", "capture_backend", "release_unused_models"}
+    for key, value in old.items():
+        if key not in execution and cfg.get(key) != value:
+            raise ValueError(f"incompatible resume configuration: {key}")
+    if old.get("model") and old["model"] != model:
+        raise ValueError("resume model mismatch")
+    if any(p.get("model", model) != model for p in pts):
+        raise ValueError("Phase 1 points were captured on another model")
+    signature = json.loads((source / "space.json").read_text())["signature"]
+    if signature != space.signature:
+        raise ValueError("resume parameter-space signature mismatch")
+    records = {}
+    for row in read_jsonl(source / "points.jsonl"):
+        records.setdefault(row["key"], {})[row["type"]] = row
+    complete = {}
+    k = sample_budget(space, cfg)
+    for pt in pts:
+        key = f"{pt['run_id']}__{pt['sample_id']}"
+        rows = records.get(key, {})
+        if set(rows) != set(NUDGES):
+            continue
+        valid = True
+        for kind, row in rows.items():
+            if row.get("sample_id") != pt["sample_id"] or row.get("run_id") != pt["run_id"]:
+                valid = False
+                break
+            if row.get("skipped"):
+                continue
+            path = source / "vectors" / kind / f"{key}.npz"
+            try:
+                with np.load(path) as z:
+                    idx, val, rms, energy = (z[n] for n in ("idx", "val", "rms", "energy"))
+                    if (len(idx) != k or len(val) != k or len(rms) != len(space.names)
+                            or len(energy) != len(space.names) or np.any(idx < 0) or np.any(idx >= space.total)
+                            or np.any(idx[1:] <= idx[:-1]) or not np.all(np.isfinite(val))
+                            or not np.all(np.isfinite(rms)) or np.any(rms <= 0)
+                            or not np.all(np.isfinite(energy)) or np.any(energy < 0)):
+                        valid = False
+            except (OSError, ValueError, KeyError):
+                valid = False
+            if not valid:
+                break
+        if valid:
+            complete[key] = rows
+    ctx.log(f"resume {rid}: {len(complete)} complete compatible points; originals left untouched")
+    ctx.write_json("resume.json", {"source_run": rid, "points": sorted(complete)})
+    return complete
+
+
+def restore_capture(ctx, cfg, key, rows, energy_acc):
+    for kind, row in rows.items():
+        if not row.get("skipped"):
+            src = RUNS_DIR / cfg["resume_run"] / "vectors" / kind / f"{key}.npz"
+            dst = ctx.dir / "vectors" / kind / src.name
+            try:
+                os.link(src, dst)
+            except OSError:
+                shutil.copy2(src, dst)
+            with np.load(dst) as z:
+                en = z["energy"]
+                energy_acc[kind] += en / max(en.sum(), 1e-30)
+        ctx.append_jsonl("points.jsonl", {**row, "reused_from": cfg["resume_run"]})
+
+
 @register("phase2", kind="gpu", defaults=PHASE2_DEFAULTS)
 def run_phase2(ctx: Ctx, cfg: dict) -> dict:
     L = M.load_model(cfg["model"])
+    if cfg.get("release_unused_models", True):
+        released = M.unload_unused(L)
+        ctx.log(f"released {released} unused cached model replicas")
     space = ParamSpace(L.model, cfg["param_filter"], cfg["include_regex"], cfg["exclude_regex"])
     pts = decision_points(cfg["phase1_runs"], cfg["verdicts"], int(cfg["max_points"]))
     if not pts:
         raise RuntimeError("no usable decision points: pick phase-1 run(s) and verdicts with results")
+    backend = cfg.get("capture_backend", "auto")
+    if backend not in ("auto", "device", "reference"):
+        raise ValueError("capture_backend must be auto, device or reference")
+    device_capture = cfg["nudge_mode"] == "linear" and (backend == "device" or
+                     (backend == "auto" and str(L.device).startswith("cuda")))
+    if backend == "device" and cfg["nudge_mode"] != "linear":
+        raise ValueError("device-native capture currently supports linear nudges only")
     types = list(NUDGES)
     k = sample_budget(space, cfg)
     est_gb = len(pts) * len(types) * k * 8 / 1e9
     ctx.log(f"model={L.name} device={L.device} filter={cfg['param_filter']} tensors={len(space.names)} knobs={space.total:,}")
     ctx.log(f"{len(pts)} decision points; per-sample set={k:,} params; est. storage {est_gb:.2f} GB (limit {cfg['max_store_gb']})")
+    ctx.log(f"capture backend={'device' if device_capture else 'reference'}; one gradient and shared linear support per point")
     if est_gb > float(cfg["max_store_gb"]):
         raise RuntimeError(f"estimated storage {est_gb:.1f} GB exceeds max_store_gb; lower sample_pct/max_points or narrow param_filter")
     ctx.write_json("space.json", {"signature": space.signature, "total": space.total, "filter": cfg["param_filter"],
@@ -167,40 +262,70 @@ def run_phase2(ctx: Ctx, cfg: dict) -> dict:
     total_steps = len(pts) + 4
     energy_acc = {t: np.zeros(len(space.names)) for t in types}
     n_ok = 0
+    reused = resume_captures(ctx, cfg, space, L.name, pts)
+    capture_timings = []
 
     space.enable_grad()
     try:
         for i, pt in enumerate(pts):
             ctx.check()
             ctx.progress(i, total_steps, f"capture {i + 1}/{len(pts)}")
+            key = f"{pt['run_id']}__{pt['sample_id']}"
+            if key in reused:
+                restore_capture(ctx, cfg, key, reused[key], energy_acc)
+                n_ok += 1
+                continue
             s = store.get(pt["sample_id"])
             if s is None:
                 continue
             try:
-                audio = load_audio(s["audio_path"])
-                nud = compute_nudges(L, space, audio, pt, cfg)
+                timings = {}
+                started = time.perf_counter()
+                with measured(timings, "audio_s", "cpu"):
+                    audio = load_audio(s["audio_path"])
+                if device_capture:
+                    nud = capture_sparse_linear(L, space, audio, pt, {**cfg, "_sample_budget": k}, timings)
+                else:
+                    with measured(timings, "reference_capture_s", "cpu"):
+                        dense = compute_nudges(L, space, audio, pt, cfg)
+                        nud = {}
+                        for kind, d in dense.items():
+                            if d["n"] is None:
+                                nud[kind] = {"info": d["info"], "sparse": None}
+                                continue
+                            idx, val, rms = select_top(d["n"], space, k, cfg["normalize"])
+                            nud[kind] = {"info": d["info"], "sparse": {"idx": idx, "val": val,
+                                         "rms": rms, "energy": space.energy_per_tensor(d["n"])}}
+                        del dense
             except Exception as e:  # noqa: BLE001
                 ctx.log(f"point {pt['sample_id']} failed: {e}")
                 continue
-            key = f"{pt['run_id']}__{pt['sample_id']}"
+            write_started = time.perf_counter()
             for t, d in nud.items():
-                if d["n"] is None:
+                if d["sparse"] is None:
                     ctx.append_jsonl("points.jsonl", {"key": key, "type": t, "sample_id": pt["sample_id"], "run_id": pt["run_id"], **d["info"]})
                     continue
-                idx, val, rms = select_top(d["n"], space, k, cfg["normalize"])
-                en = space.energy_per_tensor(d["n"])
+                payload = d["sparse"]
+                idx, val, rms, en = (payload[n] for n in ("idx", "val", "rms", "energy"))
                 energy_acc[t] += en / max(en.sum(), 1e-30)
                 np.savez(vdir / t / f"{key}.npz", idx=idx.astype(np.uint32 if space.total < 2**32 else np.int64), val=val, rms=rms, energy=en)
                 ctx.append_jsonl("points.jsonl", {"key": key, "type": t, "sample_id": pt["sample_id"], "run_id": pt["run_id"], **d["info"]})
+            timings["write_s"] = time.perf_counter() - write_started
+            timings["total_s"] = time.perf_counter() - started
+            ctx.append_jsonl("capture_timings.jsonl", {"sample_id": pt["sample_id"], **timings})
+            capture_timings.append(timings)
             n_ok += 1
             i0 = nud["to_digits"]["info"]
-            need = [t for t in types if nud[t]["n"] is not None]
-            ctx.log(f"{key}: d0={i0['d0']:+.2f} |g|={i0['grad_norm']:.3g} nudges={need}")
+            need = [t for t in types if nud[t]["sparse"] is not None]
+            ctx.log(f"{key}: d0={i0['d0']:+.2f} |g|={i0['grad_norm']:.3g} nudges={need} capture={timings['total_s']:.3f}s")
     finally:
         space.disable_grad()
 
     # ---------------- aggregation
-    summary: dict = {"decision_points": n_ok, "knobs": space.total, "types": {}, "model": L.name, "signature": space.signature}
+    summary: dict = {"decision_points": n_ok, "knobs": space.total, "types": {}, "model": L.name, "signature": space.signature,
+                     "capture_backend": "device" if device_capture else "reference", "reused_points": len(reused),
+                     "capture_timing_mean_s": {key: float(np.mean([r[key] for r in capture_timings]))
+                                               for key in capture_timings[0]} if capture_timings else {}}
     if n_ok < int(cfg["group_size"]):
         raise RuntimeError(f"only {n_ok} decision points captured; need >= group_size")
     for ti, t in enumerate(types):

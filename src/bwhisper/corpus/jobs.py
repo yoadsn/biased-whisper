@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import random
 import time
+from collections import Counter
 
 from ..jobs import Ctx, register
-from . import explore, hf_cache
+from . import explore, hf_cache, pockettts, store
 
 EXPLORE_FETCH_DEFAULTS = {
     "seeds": [234608111],
@@ -15,6 +16,11 @@ EXPLORE_FETCH_DEFAULTS = {
     "mode": "range",
     "workers": 4,
 }
+
+
+@register("corpus_import_pockettts", kind="io", defaults=pockettts.DEFAULTS)
+def import_pockettts(ctx: Ctx, cfg: dict) -> dict:
+    return pockettts.import_aligned(ctx, cfg)
 
 
 @register("corpus_import_hf", kind="io",
@@ -29,6 +35,9 @@ def import_hf(ctx: Ctx, cfg: dict) -> dict:
 
 @register("corpus_fetch_explore", kind="io", defaults=EXPLORE_FETCH_DEFAULTS)
 def fetch_explore(ctx: Ctx, cfg: dict) -> dict:
+    auth = explore.check_auth()
+    if not auth["ok"]:
+        raise RuntimeError(f"Explore authentication required: {auth.get('reason', auth.get('status'))}")
     raw_seeds = cfg.get("seeds")
     if isinstance(raw_seeds, (int, str)):
         base_seeds = [int(s.strip()) for s in str(raw_seeds).split(",") if s.strip()]
@@ -53,6 +62,7 @@ def fetch_explore(ctx: Ctx, cfg: dict) -> dict:
     total_episodes = 0
     total_bytes = 0
     seeds_used: list[int] = []
+    episode_counts = Counter(s["meta"].get("uuid") for s in store.query(source="explore", limit=10**9))
     t0 = time.time()
 
     ctx.progress(0, target, f"starting explore fetch ({mode}, {workers} workers)")
@@ -75,6 +85,7 @@ def fetch_explore(ctx: Ctx, cfg: dict) -> dict:
             pad=pad,
             mode=mode,
             workers=workers,
+            episode_counts=episode_counts,
             log=ctx.log,
             should_stop=ctx.should_stop,
             progress=lambda a, _b, bd=base_done, s=seed: ctx.progress(
@@ -91,6 +102,9 @@ def fetch_explore(ctx: Ctx, cfg: dict) -> dict:
     elapsed = max(1e-3, time.time() - t0)
     return {
         "added": total_added,
+        "target": target,
+        "target_reached": total_added >= target,
+        "shortfall": max(0, target - total_added),
         "duplicates_skipped": total_dup,
         "seeds_used": seeds_used,
         "episodes_seen": total_episodes,

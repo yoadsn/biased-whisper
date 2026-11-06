@@ -19,6 +19,7 @@ from . import phase3 as _p3  # noqa: F401
 from . import phase1_5 as _p15  # noqa: F401
 from . import budget as _bud  # noqa: F401
 from . import phase2n as _p2n  # noqa: F401
+from . import setup_scale as _setup_scale  # noqa: F401
 from .config import KNOWLEDGE_DIR, RUNS_DIR, WEB_DIR, ensure_dirs, load_settings, save_settings
 from .corpus import explore, hf_cache, store
 from .corpus import jobs as _corpus_jobs  # noqa: F401

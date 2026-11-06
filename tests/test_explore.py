@@ -1,5 +1,32 @@
 import pytest
 
+
+def test_episode_cap_persists_across_search_seeds(tmp_path, monkeypatch):
+    import httpx
+    from bwhisper.corpus import explore
+
+    episode = {"uuid": "same-episode", "duration_sec": 600,
+               "hits": [{"segment_idx": i * 3, "start_sec": i * 10,
+                         "end_sec": i * 10 + 4, "text": f"מספר {i}"} for i in range(10)]}
+    transport = httpx.MockTransport(lambda req: httpx.Response(200, json={"episodes": [episode], "has_more": False}))
+    monkeypatch.setattr(explore, "client", lambda cfg: httpx.Client(transport=transport))
+    monkeypatch.setattr(explore, "load_cfg", lambda: {**explore.DEFAULT_CFG, "headers": {}})
+    monkeypatch.setattr(explore, "load_settings", lambda: {"explore_base_url": "https://example.test"})
+    existing = set()
+    monkeypatch.setattr(explore.store, "exists", lambda source, key: key in existing)
+    def add(source, key, *args, **kwargs):
+        existing.add(key)
+        return len(existing)
+    monkeypatch.setattr(explore.store, "add_sample", add)
+    monkeypatch.setattr(explore.store, "audio_path_for", lambda source, key: tmp_path / (key + ".wav"))
+    monkeypatch.setattr(explore, "crop_episode_segments_range",
+                        lambda client, url, duration, segs: ([(s, 4.0) for s in segs], 10))
+    counts = {"same-episode": 1}  # includes pre-existing corpus, not just this fetch
+    first = explore.fetch_episodes_batch(seed=1, n=10, per_episode=3, episode_counts=counts, log=lambda msg: None)
+    second = explore.fetch_episodes_batch(seed=2, n=10, per_episode=3, episode_counts=counts, log=lambda msg: None)
+    assert first["added"] == 2 and second["added"] == 0
+    assert counts == {"same-episode": 3}
+
 from bwhisper.audio import crop_url_to_wav
 from bwhisper.corpus.explore import (
     dedupe_episode_hits,
@@ -120,4 +147,3 @@ def test_new_explore_helpers_never_leak_secrets(tmp_path):
             assert secret_cookie not in err_str
             assert secret_auth not in err_str
             assert "Cookie" not in err_str
-
