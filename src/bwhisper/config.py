@@ -70,7 +70,8 @@ PHASE1_DEFAULTS: dict[str, Any] = {
     "require_ref_digits": True,
     "max_new_tokens": 96,
     "extra_digit_chars": "",  # e.g. "%" to also treat as digit-related
-    "min_rewind_digit_tokens": 1,
+    "span_mode": True,  # v2: rewind to the style span start (prefix/hyphen), ban the digit-style family
+    "satellites_run": None,  # phase1_5 run supplying satellite tokens; null -> latest, or built-in rules
 }
 
 PHASE2_DEFAULTS: dict[str, Any] = {
@@ -78,18 +79,23 @@ PHASE2_DEFAULTS: dict[str, Any] = {
     "phase1_runs": [],  # run ids supplying decision points
     "verdicts": ["cardinal", "human_good"],  # which phase-1 verdicts are usable
     "max_points": 100,
-    "objective": "mass",  # mass | pair | mass_vs_card
+    "objective": "auto",  # auto (seq_contrast for v2 points, else mass) | seq_contrast | mass | pair | mass_vs_card
     "mistake_prob": 0.01,  # target prob = 1 - mistake_prob
     "nudge_mode": "linear",  # linear | iterative
     "skip_satisfied": True,  # only compute a nudge from samples that need it
     "iter_steps": 15,
     "iter_lr": 0.5,
-    "param_filter": "bitfit",  # bitfit | decoder | decoder_no_embed | encoder | all_no_embed | all
+    "iter_tol": 0.05,  # log-odds tolerance for "target reached"
+    # knob space: every weight and bias except the token/position embeddings (the token embedding is
+    # tied to the output readout and is handled as a separate baseline). bitfit = biases + LayerNorm only.
+    "param_filter": "all_no_embed",  # all_no_embed | all | decoder_no_embed | decoder | encoder | bitfit
     "include_regex": "",
     "exclude_regex": "",
     "normalize": "rms",  # none | rms  (per-tensor scaling used for selection & voting)
     "sample_pct": 5.0,  # "upstream params sample pct"
+    "sample_k": 1000000,  # absolute per-sample budget; overrides sample_pct when set (null -> use pct)
     "common_pct": 30.0,  # "Common upstream params percent"
+    "common_k": None,  # absolute cap on the common set (applied after common_pct)
     "agree_top_pct": 50.0,  # "top agreement params percent"
     "group_size": 3,
     "rounds": 2000,
@@ -109,6 +115,7 @@ PHASE3_DEFAULTS: dict[str, Any] = {
     "eval_limit": 50,
     "require_ref_digits": True,
     "exclude_phase2_samples": True,
+    "eval_source": None,  # restrict eval utterances to one corpus source (e.g. hf_cache, explore)
     "controls": ["shuffled_values", "random_indices"],
     "max_new_tokens": 96,
     "seed": 0,

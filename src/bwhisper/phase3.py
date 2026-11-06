@@ -26,7 +26,7 @@ from .hebrew_numbers import classify_word, count_mentions, is_degenerate, words
 from .jobs import Ctx, register
 from .paramspace import ParamSpace
 from .phase1 import decision_points
-from .phase2 import objective
+from .phase2 import point_objective
 
 
 def _strip_numbers(text: str) -> list[str]:
@@ -88,7 +88,7 @@ def run_phase3(ctx: Ctx, cfg: dict) -> dict:
     if not cands:
         raise RuntimeError("no candidate sets to test")
 
-    pool = store.query(digits_only=bool(cfg["require_ref_digits"]), limit=10**6)
+    pool = store.query(source=cfg.get("eval_source") or None, digits_only=bool(cfg["require_ref_digits"]), limit=10**6)
     if cfg["exclude_phase2_samples"]:
         pool = [s for s in pool if s["id"] not in p2_ids]
     rng.shuffle(pool)
@@ -151,8 +151,7 @@ def run_phase3(ctx: Ctx, cfg: dict) -> dict:
                     e = M.encode(L, probe_audio[sid]) if touches_encoder or sid not in probe_enc else probe_enc[sid]
                     if not touches_encoder:
                         probe_enc[sid] = e
-                    lg = M.prefix_logits(L, e, p["prefix_ids"])
-                    d = float(objective(L, lg, p, p2cfg["objective"]))
+                    d = float(point_objective(L, e, p, p2cfg["objective"]))
                     ds.append(d)
                     ps.append(1 / (1 + np.exp(-d)))
         finally:

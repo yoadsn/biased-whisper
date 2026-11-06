@@ -164,3 +164,22 @@ def auto_verdict(orig: str, new: str) -> tuple[str, dict]:
     if ok:
         return "partial", d
     return "no_number_words", d
+
+
+def split_number_prefix(word: str) -> tuple[str, str] | None:
+    """Split a Hebrew number word (cardinal or ordinal) into (prefix, stem),
+    mirroring _strip_candidates / classify_word. Returns None if not a number word."""
+    if DIGIT_RE.search(word):
+        return None
+    w = normalize_word(word)
+    if not w:
+        return None
+    if w in CARDINAL_STEMS or w in ORDINAL_STEMS:
+        return ("", w)
+    for n in (1, 2, 3):
+        if len(w) > n + 1 and all(c in _PREFIXES for c in w[:n]):
+            cand = w[n:]
+            if cand in CARDINAL_STEMS or cand in ORDINAL_STEMS:
+                return (w[:n], cand)
+    return None
+

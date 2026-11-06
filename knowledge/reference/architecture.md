@@ -18,7 +18,12 @@ src/bwhisper/
   audio.py         ffmpeg decode/crop -> 16 kHz mono
   corpus/          store.py (SQLite), hf_cache.py (offline source), explore.py (explore.ivrit.ai), jobs.py
   jobs.py          job registry/runner; run dir = data/runs/<id>/{job.json,log.txt,*.jsonl,...}
-  phase1.py phase2.py phase3.py   the three phases (each registers a job type)
+  phase1.py        Phase 1 (v1 first-digit rewind, v2 span mode: StyleTokens, divergence region, paired transcripts)
+  phase1_5.py      co-occurrence mining around digit spans, edit patterns, satellites.json
+  phase2.py        weight-space nudges; point_objective (mass | pair | seq_contrast | auto) shared by all phases
+  phase2n.py       component attribution (neurons, heads, residual), BH-FDR + voting, translation to weight edits
+  budget.py        budget sweep (energy, self effect, held-out transfer vs k)
+  phase3.py        control experiments (applies any candidates_<type>.npz)
   paramspace.py    stable flat addressing of a parameter subset, sparse edit/undo
   aggregate.py     counts -> common set -> voting -> permutation null -> FDR (pure numpy, unit-tested)
   api.py           FastAPI: settings, corpus, jobs, phase views, knowledge
@@ -37,7 +42,8 @@ from the CLI shows up in the UI and vice versa. Job state survives restarts (act
 
 # Decoder
 
-`model.greedy` is a cached greedy decoder with explicit control of the forced prefix, ban sets and rewinds. Tests assert it
+`model.greedy` is a cached greedy decoder with explicit control of the forced prefix, ban sets, per-step bans (`step_ban`) and
+rewinds. `model.seq_logprobs` gives teacher-forced log-probs for the sequence-contrast objective. Tests assert it
 matches `WhisperForConditionalGeneration.generate` token for token, and that rewinding reproduces the full decode.
 Whisper's `suppress_tokens` are applied; digits are never in that list.
 

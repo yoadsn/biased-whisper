@@ -173,7 +173,10 @@ def greedy(
     ban_digits: bool = False,
     extra_ban: list[int] | None = None,
     apply_whisper_suppress: bool = True,
+    step_ban=None,
 ) -> DecodeResult:
+    """``step_ban(history) -> list[int]`` may ban extra tokens at a step given all tokens so far
+    (prefix + generated), e.g. a hyphen right after a one-letter prefix."""
     """Greedy decode continuing from ``prefix`` (which includes the forced SOT tokens)."""
     ban = torch.zeros(L.vocab, dtype=torch.bool, device=L.device)
     if apply_whisper_suppress and L.suppress_ids:
@@ -203,6 +206,10 @@ def greedy(
         logits = logits.masked_fill(ban, float("-inf"))
         if n_prefix_gen + i == 0:
             logits = logits.masked_fill(begin, float("-inf"))
+        if step_ban is not None:
+            extra = step_ban(prefix + toks)
+            if extra:
+                logits[torch.tensor(extra, device=L.device)] = float("-inf")
         lp = torch.log_softmax(logits, -1)
         t = int(torch.argmax(lp))
         p_dig = float(lp[L.digit_mask].exp().sum()) if not ban_digits else 0.0
@@ -240,3 +247,11 @@ def step_distribution(L: Loaded, enc: torch.Tensor, prefix: list[int], topk: int
             for v, i in zip(top.values, top.indices)
         ],
     }
+
+
+def seq_logprobs(L: Loaded, enc: torch.Tensor, ids: list[int]) -> torch.Tensor:
+    """Teacher-forced log-probs: out[i] = log p(ids[i+1] | ids[:i+1]); differentiable. Shape [len(ids)-1]."""
+    t = torch.tensor([ids], device=L.device)
+    out = L.model.model.decoder(input_ids=t[:, :-1], encoder_hidden_states=enc, use_cache=False)
+    lp = torch.log_softmax(L.model.proj_out(out.last_hidden_state)[0].float(), -1)
+    return lp.gather(1, t[0, 1:].unsqueeze(1)).squeeze(1)

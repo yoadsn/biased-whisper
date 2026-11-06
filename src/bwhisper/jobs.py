@@ -28,6 +28,14 @@ def register(name: str, kind: str = "gpu", defaults: dict | None = None):
     return deco
 
 
+def _json_default(o):
+    if hasattr(o, "item"):  # numpy scalars
+        return o.item()
+    if hasattr(o, "tolist"):
+        return o.tolist()
+    raise TypeError(f"not JSON serializable: {type(o).__name__}")
+
+
 class Cancelled(Exception):
     pass
 
@@ -60,10 +68,10 @@ class Ctx:
     def append_jsonl(self, name: str, obj: Any) -> None:
         with self.job.lock:
             with open(self.dir / name, "a", encoding="utf-8") as f:
-                f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+                f.write(json.dumps(obj, ensure_ascii=False, default=_json_default) + "\n")
 
     def write_json(self, name: str, obj: Any) -> None:
-        (self.dir / name).write_text(json.dumps(obj, ensure_ascii=False, indent=1))
+        (self.dir / name).write_text(json.dumps(obj, ensure_ascii=False, indent=1, default=_json_default))
 
 
 class Job:

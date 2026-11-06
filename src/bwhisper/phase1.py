@@ -11,7 +11,9 @@ token + the cardinal first token).
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
+from difflib import SequenceMatcher
 
 from . import model as M
 from .audio import load_audio
@@ -21,7 +23,128 @@ from .hebrew_numbers import auto_verdict, count_mentions
 from .jobs import Ctx, read_jsonl, register
 
 
-def analyse_sample(L: M.Loaded, audio, max_new: int, min_digit_tokens: int = 1) -> dict:
+_PREFIX_RE = re.compile(r"\s?[והבכלמש]{1,3}")
+
+
+def is_hyphen_text(t: str) -> bool:
+    t = t.strip()
+    return bool(t) and (t in ("-", "־") or t.endswith(("-", "־")))
+
+
+def is_prefix_text(t: str) -> bool:
+    return bool(_PREFIX_RE.fullmatch(t))
+
+
+_FUSE_PROBES = ("עשרים", "שלוש", "אלפיים", "מאה", "חמש", "שמונים")
+
+
+def _byte_decoder() -> dict[str, int]:
+    """Inverse of GPT-2's bytes_to_unicode (the byte-level BPE alphabet Whisper uses)."""
+    bs = list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
+    cs = bs[:]
+    n = 0
+    for b in range(256):
+        if b not in bs:
+            bs.append(b)
+            cs.append(256 + n)
+            n += 1
+    return {chr(c): b for b, c in zip(bs, cs)}
+
+
+_BYTE_DEC = _byte_decoder()
+
+
+def token_bytes(tokenizer, i: int) -> bytes:
+    tok = tokenizer.convert_ids_to_tokens(i)
+    try:
+        return bytes(_BYTE_DEC[c] for c in tok)
+    except (KeyError, TypeError):
+        return b""
+
+
+class StyleTokens:
+    """Token sets for span-level decisions.
+
+    hyphen   tokens that are a hyphen ('-'), plus raw-byte tokens of 0xD6 (maqaf '־' and niqqud are
+             byte-split by the BPE and never appear in normal output); banned after a prefix token
+    prefix   one-to-three-letter prefix tokens (' ב', ' ו', ' מה', ...)
+    merging  prefix tokens whose fused number words start with a *different* token (' ב' -> ' בא',
+             ' בש'); at the span start these are banned so the word path can fuse the prefix
+    symbols  digit-style symbols ('%' and satellite symbols), banned on the word path
+    """
+
+    def __init__(self, L: M.Loaded, satellites: dict | None = None):
+        tk = L.tokenizer
+        self.hyphen, self.prefix, self.symbols, self.d6 = set(), set(), set(), set()
+        for i in range(min(L.vocab, len(tk))):
+            t = L.decode([i], skip_special=False)
+            if is_hyphen_text(t) and not any(c.isdigit() for c in t):
+                self.hyphen.add(i)
+            elif is_prefix_text(t):
+                self.prefix.add(i)
+            if "%" in t and not any("\u0590" <= c <= "\u05ff" for c in t):
+                self.symbols.add(i)
+            b = token_bytes(tk, i)
+            if b and 0xD6 in b and i < L.eos:
+                self.d6.add(i)
+        self.hyphen |= self.d6
+        self.merging = set()
+        for p in self.prefix:
+            pt = L.decode([p], skip_special=False)
+            firsts = [tk.encode(pt + w, add_special_tokens=False)[0] for w in _FUSE_PROBES]
+            if sum(f != p for f in firsts) > len(firsts) / 2:
+                self.merging.add(p)
+        self.sat_before = set()
+        for e in (satellites or {}).get("before", []):
+            self.sat_before.add(int(e["id"]))
+        for e in (satellites or {}).get("after", []):
+            t = e.get("tok", "")
+            if t.strip() and not any(c.isalpha() or c.isdigit() for c in t):  # symbols only, never words
+                self.symbols.add(int(e["id"]))
+
+    def span_start(self, tokens: list[int], d_pos: int, decode) -> int:
+        s = d_pos
+        if s > 0 and (tokens[s - 1] in self.hyphen or tokens[s - 1] in self.sat_before):
+            s -= 1
+            if s > 0 and (tokens[s - 1] in self.prefix or tokens[s - 1] in self.sat_before) and tokens[s] in self.hyphen:
+                s -= 1
+        return s
+
+    def step_ban(self, prefix_len: int | None = None, span_tok: int | None = None):
+        hy = sorted(self.hyphen)
+        first_ban = [span_tok] if span_tok is not None and span_tok in self.merging else []
+
+        def f(history: list[int]) -> list[int]:
+            out = list(first_ban) if prefix_len is not None and len(history) == prefix_len else []
+            if history and history[-1] in self.prefix:
+                out += hy
+            return out
+
+        return f
+
+
+def first_divergence(a: list[int], b: list[int]) -> int:
+    n = min(len(a), len(b))
+    return next((i for i in range(n) if a[i] != b[i]), n)
+
+
+def reconvergence(a: list[int], b: list[int], start: int, min_equal: int = 3) -> tuple[int, int]:
+    """End (exclusive) of the divergent region starting at ``start`` in a and b."""
+    sm = SequenceMatcher(a=a[start:], b=b[start:], autojunk=False)
+    for blk in sm.get_matching_blocks():
+        if blk.size >= min_equal:
+            return start + blk.a, start + blk.b
+    return len(a), len(b)
+
+
+def latest_satellites() -> dict | None:
+    runs = sorted(RUNS_DIR.glob("phase1_5-*/satellites.json"))
+    return json.loads(runs[-1].read_text()) if runs else None
+
+
+def analyse_sample(L: M.Loaded, audio, max_new: int, style: StyleTokens | None = None) -> dict:
+    """style=None -> v1 (rewind to first digit token). Otherwise v2: rewind to the start of the style
+    span (prefix + hyphen), ban digits, hyphen-after-prefix and digit-style symbols."""
     enc = M.encode(L, audio)
     base = M.greedy(L, enc, list(L.sot_seq), max_new=max_new)
     text = L.decode(base.tokens).strip()
@@ -30,27 +153,52 @@ def analyse_sample(L: M.Loaded, audio, max_new: int, min_digit_tokens: int = 1) 
         "baseline_tokens": base.tokens,
         "mentions": count_mentions(text),
         "has_digits": False,
+        "span_mode": style is not None,
     }
     d_pos = next((i for i, t in enumerate(base.tokens) if bool(L.digit_mask[t])), None)
     if d_pos is None:
         out["verdict"] = "no_digits"
         return out
     out["has_digits"] = True
-    prefix = list(L.sot_seq) + base.tokens[:d_pos]
-    dig_tok = base.tokens[d_pos]
-    dist_free = M.step_distribution(L, enc, prefix)
-    dist_ban = M.step_distribution(L, enc, prefix, ban_digits=True)
-    sup = M.greedy(L, enc, prefix, max_new=max_new, ban_digits=True)
-    sup_text = L.decode(base.tokens[:d_pos] + sup.tokens).strip()
+    if style is None:
+        rw, extra, sb = d_pos, None, None
+    else:
+        rw = style.span_start(base.tokens, d_pos, L.decode)
+        extra = sorted(style.symbols | style.d6)
+        sb = style.step_ban(len(L.sot_seq) + rw, base.tokens[rw] if rw < d_pos else None)
+    prefix = list(L.sot_seq) + base.tokens[:rw]
+    sup = M.greedy(L, enc, prefix, max_new=max_new, ban_digits=True, extra_ban=extra, step_ban=sb)
+    y_d = base.tokens
+    y_c = base.tokens[:rw] + sup.tokens
+    dec = first_divergence(y_d, y_c)
+    if dec >= len(y_d) or dec >= len(y_c):
+        out["verdict"] = "no_divergence"
+        return out
+    end_d, end_c = reconvergence(y_d, y_c, dec)
+    dec_prefix = list(L.sot_seq) + y_d[:dec]
+    dist_free = M.step_distribution(L, enc, dec_prefix)
+    dist_ban = M.step_distribution(L, enc, list(L.sot_seq) + y_c[:dec], ban_digits=True)
+    sup_text = L.decode(y_c).strip()
     verdict, diff = auto_verdict(text, sup_text)
+    if style is not None and verdict == "cardinal" and any(t in style.symbols for t in y_c):
+        verdict = "partial"
     out.update(
         {
-            "decision_index": d_pos,
-            "prefix_ids": prefix,
-            "prefix_text": L.decode(base.tokens[:d_pos]),
-            "hyphen_committed": bool(d_pos > 0 and L.decode([base.tokens[d_pos - 1]], skip_special=False).rstrip().endswith(("-", "־"))),
-            "digit_token": {"id": dig_tok, "tok": L.decode([dig_tok], skip_special=False)},
-            "cardinal_token": {"id": sup.tokens[0], "tok": L.decode([sup.tokens[0]], skip_special=False)} if sup.tokens else None,
+            "decision_index": dec,
+            "first_digit_index": d_pos,
+            "rewind_index": rw,
+            "span_offset": d_pos - dec,
+            "prefix_ids": dec_prefix,
+            "prefix_text": L.decode(y_d[:dec]),
+            "hyphen_committed": bool(d_pos > 0 and is_hyphen_text(L.decode([y_d[d_pos - 1]], skip_special=False))),
+            "digit_token": {"id": y_d[dec], "tok": L.decode([y_d[dec]], skip_special=False)},
+            "cardinal_token": {"id": y_c[dec], "tok": L.decode([y_c[dec]], skip_special=False)},
+            "y_digit": y_d,
+            "y_cardinal": y_c,
+            "div_digit": [dec, end_d],
+            "div_cardinal": [dec, end_c],
+            "div_digit_text": L.decode(y_d[dec:end_d]),
+            "div_cardinal_text": L.decode(y_c[dec:end_c]),
             "p_digit": dist_free["p_digit"],
             "dist_free": dist_free["top"],
             "dist_suppressed": dist_ban["top"],
@@ -68,6 +216,16 @@ def analyse_sample(L: M.Loaded, audio, max_new: int, min_digit_tokens: int = 1) 
 def run_phase1(ctx: Ctx, cfg: dict) -> dict:
     L = M.load_model(cfg["model"], extra_digit_chars=cfg.get("extra_digit_chars", ""))
     ctx.log(f"model={L.name} device={L.device} digit_tokens={len(L.digit_ids)}")
+    style = None
+    if cfg.get("span_mode", True):
+        sat = None
+        if cfg.get("satellites_run"):
+            sat = json.loads((RUNS_DIR / cfg["satellites_run"] / "satellites.json").read_text())
+        else:
+            sat = latest_satellites()
+        style = StyleTokens(L, sat)
+        ctx.log(f"span mode: hyphen={len(style.hyphen)} prefix={len(style.prefix)} symbols={len(style.symbols)} "
+                f"satellites={'yes' if sat else 'none (built-in rules only)'}")
     if cfg.get("sample_ids"):
         samples = store.query(ids=[int(i) for i in cfg["sample_ids"]], limit=10**6)
     else:
@@ -80,7 +238,7 @@ def run_phase1(ctx: Ctx, cfg: dict) -> dict:
         ctx.progress(i, len(samples), f"sample {s['id']}")
         try:
             audio = load_audio(s["audio_path"])
-            r = analyse_sample(L, audio, int(cfg["max_new_tokens"]))
+            r = analyse_sample(L, audio, int(cfg["max_new_tokens"]), style)
         except Exception as e:  # noqa: BLE001
             ctx.log(f"sample {s['id']} error: {e}")
             r = {"verdict": "error", "error": str(e)}

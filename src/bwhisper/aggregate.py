@@ -44,13 +44,15 @@ class Aggregator:
         self._cache: "OrderedDict[int, np.ndarray]" = OrderedDict()
 
     # 1-2
-    def build_common_set(self, common_pct: float, on_file: Callable[[int], None] = lambda i: None) -> dict:
+    def build_common_set(self, common_pct: float, on_file: Callable[[int], None] = lambda i: None, max_k: int | None = None) -> dict:
         counts = np.zeros(self.total, dtype=np.uint16)
         for i, f in enumerate(self.files):
             counts[load_sample(f)["idx"]] += 1
             on_file(i)
         union = np.flatnonzero(counts)
         n_common = max(1, int(math.ceil(len(union) * common_pct / 100.0)))
+        if max_k:
+            n_common = min(n_common, int(max_k))
         order = np.argsort(-counts[union].astype(np.int64), kind="stable")[:n_common]
         self.C = np.sort(union[order])
         self.counts = counts

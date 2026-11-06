@@ -49,11 +49,35 @@ def objective(L: M.Loaded, logits: torch.Tensor, pt: dict, kind: str) -> torch.T
     return lse_d - torch.logsumexp(z[~D], 0)
 
 
+def resolve_kind(pt: dict, kind: str) -> str:
+    if kind == "auto":
+        return "seq_contrast" if pt.get("y_digit") else "mass"
+    if kind == "seq_contrast" and not pt.get("y_digit"):
+        raise ValueError("objective seq_contrast needs span-mode (v2) phase-1 points with y_digit/y_cardinal")
+    return kind
+
+
+def point_objective(L: M.Loaded, enc: torch.Tensor, pt: dict, kind: str) -> torch.Tensor:
+    """Digit-style vs word-style log-odds for one decision point.
+
+    seq_contrast: log P(Y_D) - log P(Y_C) summed over the divergent region (teacher forced), i.e. the
+    whole style span incl. prefix, number, '%'/'אחוז' and agreement. Other kinds look at one step."""
+    kind = resolve_kind(pt, kind)
+    if kind == "seq_contrast":
+        n0 = len(L.sot_seq)
+        a, b = pt["div_digit"]
+        c, e = pt["div_cardinal"]
+        lp_d = M.seq_logprobs(L, enc, list(L.sot_seq) + pt["y_digit"][:b])
+        lp_c = M.seq_logprobs(L, enc, list(L.sot_seq) + pt["y_cardinal"][:e])
+        return lp_d[n0 + a - 1 : n0 + b - 1].sum() - lp_c[n0 + c - 1 : n0 + e - 1].sum()
+    return objective(L, M.prefix_logits(L, enc, pt["prefix_ids"]), pt, kind)
+
+
 def _eval_grad(L, space: ParamSpace, audio, pt, kind: str):
     space.zero_grad()
     enc = M.encode(L, audio, grad=space.has_encoder)
     with torch.enable_grad():
-        d = objective(L, M.prefix_logits(L, enc, pt["prefix_ids"]), pt, kind)
+        d = point_objective(L, enc, pt, kind)
         d.backward()
     g = space.flat_grad()
     space.zero_grad()
@@ -83,14 +107,15 @@ def compute_nudges(L, space: ParamSpace, audio, pt, cfg) -> dict[str, dict]:
             total = torch.zeros_like(g)
             d, gg = d0, g
             try:
+                tol = float(cfg.get("iter_tol", 0.05))
                 for _ in range(int(cfg["iter_steps"])):
-                    if (tgt > 0 and d >= tgt) or (tgt < 0 and d <= tgt):
+                    if (tgt - d) * math.copysign(1, tgt) <= tol:
                         break
                     step = gg * ((tgt - d) / (float(gg.pow(2).sum()) + 1e-20)) * float(cfg["iter_lr"])
                     space.apply_flat(step)
                     total += step
                     d, gg = _eval_grad(L, space, audio, pt, kind)
-                info["reached"] = (d >= tgt) if tgt > 0 else (d <= tgt)
+                info["reached"] = (tgt - d) * math.copysign(1, tgt) <= tol
                 info["d_final"] = d
             finally:
                 space.restore_snapshot(snap)
@@ -99,14 +124,21 @@ def compute_nudges(L, space: ParamSpace, audio, pt, cfg) -> dict[str, dict]:
     return out
 
 
-def select_top(n: torch.Tensor, space: ParamSpace, pct: float, normalize: str):
+def sample_budget(space: ParamSpace, cfg: dict) -> int:
+    if cfg.get("sample_k"):
+        return int(min(space.total, int(cfg["sample_k"])))
+    return max(1, int(math.ceil(space.total * float(cfg["sample_pct"]) / 100.0)))
+
+
+def selection_score(n: torch.Tensor, space: ParamSpace, normalize: str):
     rms = space.rms_per_tensor(n)
     if normalize == "rms":
-        scale = np.repeat(rms, space.sizes)
-        score = n.abs() / torch.from_numpy(scale)
-    else:
-        score = n.abs()
-    k = max(1, int(math.ceil(space.total * pct / 100.0)))
+        return n.abs() / torch.from_numpy(np.repeat(rms, space.sizes)), rms
+    return n.abs(), rms
+
+
+def select_top(n: torch.Tensor, space: ParamSpace, k: int, normalize: str):
+    score, rms = selection_score(n, space, normalize)
     top = torch.topk(score, k, sorted=False).indices.numpy()
     top.sort()
     return top, n[top].numpy().astype(np.float32), rms
@@ -120,7 +152,7 @@ def run_phase2(ctx: Ctx, cfg: dict) -> dict:
     if not pts:
         raise RuntimeError("no usable decision points: pick phase-1 run(s) and verdicts with results")
     types = list(NUDGES)
-    k = math.ceil(space.total * cfg["sample_pct"] / 100)
+    k = sample_budget(space, cfg)
     est_gb = len(pts) * len(types) * k * 8 / 1e9
     ctx.log(f"model={L.name} device={L.device} filter={cfg['param_filter']} tensors={len(space.names)} knobs={space.total:,}")
     ctx.log(f"{len(pts)} decision points; per-sample set={k:,} params; est. storage {est_gb:.2f} GB (limit {cfg['max_store_gb']})")
@@ -155,7 +187,7 @@ def run_phase2(ctx: Ctx, cfg: dict) -> dict:
                 if d["n"] is None:
                     ctx.append_jsonl("points.jsonl", {"key": key, "type": t, "sample_id": pt["sample_id"], "run_id": pt["run_id"], **d["info"]})
                     continue
-                idx, val, rms = select_top(d["n"], space, float(cfg["sample_pct"]), cfg["normalize"])
+                idx, val, rms = select_top(d["n"], space, k, cfg["normalize"])
                 en = space.energy_per_tensor(d["n"])
                 energy_acc[t] += en / max(en.sum(), 1e-30)
                 np.savez(vdir / t / f"{key}.npz", idx=idx.astype(np.uint32 if space.total < 2**32 else np.int64), val=val, rms=rms, energy=en)
@@ -181,7 +213,7 @@ def run_phase2(ctx: Ctx, cfg: dict) -> dict:
             continue
         ctx.progress(len(pts) + ti * 2, total_steps, f"aggregate {t}")
         agg = Aggregator(files, space.total, space.tensor_ids, cfg["normalize"])
-        common = agg.build_common_set(float(cfg["common_pct"]))
+        common = agg.build_common_set(float(cfg["common_pct"]), max_k=cfg.get("common_k"))
         ctx.log(f"[{t}] union={common['union']:,} common={common['common']:,}")
         rounds = int(cfg["rounds"])
         real = agg.vote(rounds, int(cfg["group_size"]), float(cfg["agree_top_pct"]), int(cfg["seed"]),

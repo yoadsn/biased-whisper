@@ -48,10 +48,18 @@ right foundation. Most issues below are about definitions and statistics, not ab
 * The "cardinal"/"non-cardinal" naming was ambiguous (the sentence describes choosing the *digit* token). **[fixed]** Named by
   direction: `to_digits`, `to_cardinal`.
 
-## The two nudges are the same vector (important)
+## The two nudges are the same vector to first order (important)
 
-With one objective, both nudges are `delta * grad(d) / |grad(d)|^2`: **identical direction, opposite sign**. Their
-top-5% sets coincide and agreement between them proves nothing. Real differences come only from:
+With one objective, both linear nudges are `delta * grad(d) / |grad(d)|^2`: **identical direction, opposite sign**, with magnitudes
+that depend on the current position (`delta_up = d* - d0`, `delta_down = -d* - d0`). This also holds for per-token losses: in logit
+space `grad log p_t = e_t - p` and `grad log(1 - p_t) = -(p_t / (1 - p_t)) (e_t - p)`, which is the same vector times a
+position-dependent scalar. So the current probability changes the *size* of the step, not its first-order *direction*.
+
+Measured on whisper-small, bitfit space, 6 decision points (2026-11-06): linear cos = -1.000 exactly. Following the real model with
+damped Gauss-Newton to the target (iterative mode) gives cos = -0.75 to -0.96 and top-5% Jaccard 0.37 to 0.69, and the farther the
+target, the bigger the divergence. Nonlinearity is real but moderate. The up and down step sizes differed by up to 6x.
+
+Their top-5% sets coincide in linear mode, so agreement between them proves nothing. Real differences come only from:
 
 1. **cohort** - which samples need the nudge. A sample already at 99% digits needs no `to_digits` nudge; computing it anyway
    gives a vector pointing the *wrong way* and wrecks cross-sample sign agreement (observed in the first run: samples with
@@ -82,11 +90,15 @@ nudge by its own RMS for *selection and voting*; raw values are kept for statist
 the ablation. Alternatives to sweep: per-tensor top-k (stratified, every tensor contributes 5%) and rank-percentile.
 Compare candidate sets and Phase 3 effect for each.
 
-## Tied embeddings
+## Tied embeddings (the readout)
 
-`proj_out.weight` is tied to `embed_tokens.weight`. The gradient on the digit tokens' embedding rows is trivially the
-largest (it *is* the readout) and equals a logit bias. **[fixed]** presets exclude embeddings except `all`/`decoder`. Treat the
-readout as a separate baseline, not an "upstream" knob.
+The decoder's token embedding `E` is a matrix of shape [vocab = 51,865, d_model = 768]; row `i` is token `i`'s vector. It is used
+twice ("tied"): at the input (token id -> row) and at the output, where the logit of token `i` is `h . E[i]` (`h` = final hidden
+state; Whisper has no separate output layer or logit bias). So the gradient of the digit logit with respect to the digit tokens'
+own rows is just `h`. It is large, it is one step from the output, and editing it is the same as adding a context-dependent bias to
+those tokens' logits. It is the most downstream knob possible, not an upstream decision, and editing it also changes those tokens'
+input embeddings. **[fixed]** `all_no_embed` (default) excludes token and position embeddings. Editing the readout is kept as a
+*baseline* to beat in Phase 3 (a logit bias on digit-style tokens), not as a discovery target.
 
 ## Scale and storage
 
