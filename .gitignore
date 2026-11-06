@@ -1,0 +1,35 @@
+# runtime data, model weights, binaries and secrets are never committed
+data/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.DS_Store
+.env
+*.cookies
+secrets/
+
+# weights / binaries / audio / tensors
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.gguf
+*.onnx
+*.npy
+*.npz
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+*.sqlite
+*.db
+
+# editor/agent artifacts
+.openchamber/

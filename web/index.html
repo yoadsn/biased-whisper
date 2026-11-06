@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>biased-whisper harness</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
+</head>
+<body x-data="app()" x-init="init()">
+
+<header>
+  <h1>🎙 biased-whisper</h1>
+  <nav>
+    <template x-for="t in tabs" :key="t">
+      <button :class="{on: tab===t}" @click="tab=t" x-text="t"></button>
+    </template>
+  </nav>
+  <span class="spacer"></span>
+  <template x-if="active().length">
+    <span class="row small">
+      <span class="pill running" x-text="active().length + ' running'"></span>
+      <span class="muted" x-text="active()[0].type + ' ' + (active()[0].message||'')"></span>
+      <span class="progress"><div :style="'width:'+pct(active()[0])+'%'"></div></span>
+    </span>
+  </template>
+  <span class="small muted" x-text="settings.model_active + ' · ' + device"></span>
+</header>
+<div x-show="toast" x-transition class="card" style="position:fixed;right:16px;bottom:16px;z-index:9;max-width:420px" x-text="toast"></div>
+
+<main>
+
+<!-- ======================= OVERVIEW ======================= -->
+<section x-show="tab==='overview'">
+  <h2>Overview</h2>
+  <div class="grid g2">
+    <div class="card">
+      <h3>Models &amp; device</h3>
+      <div class="cfg">
+        <label class="f">smoke model (local, fast)<input type="text" x-model="settings.model_smoke"></label>
+        <label class="f">inference model (local)<input type="text" x-model="settings.model_infer"></label>
+        <label class="f">active model (default for all phases)<input type="text" x-model="settings.model_active"></label>
+        <label class="f">device<select x-model="settings.device"><option>auto</option><option>cpu</option><option>mps</option><option>cuda</option></select></label>
+        <label class="f">language<input type="text" x-model="settings.language" style="min-width:60px;width:60px"></label>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" @click="saveSettings()">Save</button>
+        <button class="btn sec" @click="settings.model_active=settings.model_smoke">use smoke</button>
+        <button class="btn sec" @click="settings.model_active=settings.model_infer">use inference</button>
+        <span class="small muted">resolved device: <b x-text="device"></b></span>
+      </div>
+      <p class="small muted">Jobs load the active model unless a phase config overrides <code>model</code>. On a server, point these at the larger ivrit.ai checkpoints.</p>
+    </div>
+    <div class="card">
+      <h3>Pipeline state</h3>
+      <div class="kv">
+        <span>corpus</span><span><b x-text="corpus.stats.total"></b> samples <a href="#corpus" @click="tab='corpus'">→</a></span>
+        <template x-for="p in ['phase1','phase2','phase3']" :key="p">
+          <template x-if="true">
+            <span style="display:contents">
+              <span x-text="p"></span>
+              <span>
+                <template x-if="byType(p)[0]"><span><span class="pill" :class="byType(p)[0].status" x-text="byType(p)[0].status"></span>
+                  <span class="small mono" x-text="byType(p)[0].id"></span>
+                  <a :href="'#'+p" @click="tab=p">→</a></span></template>
+                <template x-if="!byType(p)[0]"><span class="muted">no runs yet</span></template>
+              </span>
+            </span>
+          </template>
+        </template>
+      </div>
+      <p class="small muted" style="margin-top:12px">Everything here is also available as <code>uv run bw run &lt;type&gt; '&lt;json&gt;'</code>. Runs live under <code>data/runs/&lt;id&gt;/</code>; the UI just reads them.</p>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Flow</h3>
+    <div class="row small">
+      <span class="pill">1 corpus</span>→<span class="pill">2 phase 1: both forms exist?</span>→<span class="pill">3 phase 2: which knobs?</span>→<span class="pill">4 phase 3: do the knobs steer output?</span>
+    </div>
+    <p class="muted small">Start in <b>corpus</b> (import from your local HF cache works offline; explore.ivrit.ai needs your login cookie), then run phase 1 and review verdicts, then phase 2, then phase 3. Read <b>knowledge → review of the approach</b> before sweeping hyperparameters.</p>
+  </div>
+</section>
+
+<!-- ======================= CORPUS ======================= -->
+<section x-show="tab==='corpus'">
+  <h2>Corpus <span class="muted small" x-text="corpus.total + ' matching · ' + corpus.stats.total + ' total'"></span></h2>
+  <div class="grid g2">
+    <div class="card">
+      <h3>Import from local HF cache (offline)</h3>
+      <div class="cfg" data-cfg="corpus_import_hf"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" @click="launch('corpus_import_hf')">Import digit-containing utterances</button>
+        <span class="small muted">datasets: <span x-text="corpus.hf.map(d=>d.name+' ('+d.entries+')').join(', ') || 'none found'"></span></span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>explore.ivrit.ai <span class="small muted">(Google login)</span></h3>
+      <p class="small muted">Log in with your browser, open DevTools → Network, run the search, right-click the search request (and an audio request) → <i>Copy as cURL</i>, paste below. The cookie is stored in <code>data/secrets/</code> (gitignored).</p>
+      <div class="cols2">
+        <label class="f">search request (cURL)<textarea rows="3" x-model="corpus.curlSearch" class="mono"></textarea></label>
+        <label class="f">audio segment request (cURL, optional)<textarea rows="3" x-model="corpus.curlAudio" class="mono"></textarea></label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" @click="importCurl()" :disabled="!corpus.curlSearch">Save from cURL</button>
+        <button class="btn sec" @click="exploreCheck()">Check auth</button>
+        <button class="btn sec" @click="exploreProbe()">Probe API paths</button>
+      </div>
+      <template x-if="corpus.explore">
+        <details style="margin-top:8px"><summary class="small">mapping / templates (cookie: <span x-text="corpus.explore.cookie||'none'"></span>)</summary>
+          <div class="cfg" style="margin-top:6px">
+            <label class="f">search_url<input type="text" style="width:420px" x-model="corpus.explore.search_url"></label>
+            <label class="f">audio_url<input type="text" style="width:420px" x-model="corpus.explore.audio_url"></label>
+            <template x-for="k in Object.keys(corpus.explore.mapping)" :key="k">
+              <label class="f"><span x-text="'mapping.'+k"></span><input type="text" x-model="corpus.explore.mapping[k]"></label>
+            </template>
+            <label class="f">page_size<input type="number" x-model="corpus.explore.page_size"></label>
+          </div>
+          <button class="btn sec" @click="saveExplore()" style="margin-top:6px">Save mapping</button>
+        </details>
+      </template>
+      <template x-if="corpus.probe"><pre class="log" x-text="JSON.stringify(corpus.probe,null,1)"></pre></template>
+      <div class="cfg" data-cfg="corpus_fetch_explore" style="margin-top:8px"></div>
+      <button class="btn" style="margin-top:8px" @click="launch('corpus_fetch_explore')">Fetch batch from explore</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <input type="text" placeholder="search text…" x-model="corpus.q" @keyup.enter="loadCorpus(true)">
+      <select x-model="corpus.source" @change="loadCorpus(true)"><option value="">all sources</option><template x-for="s in corpus.stats.sources" :key="s.source"><option :value="s.source" x-text="s.source+' ('+s.n+')'"></option></template></select>
+      <label class="chk"><input type="checkbox" x-model="corpus.digitsOnly" @change="loadCorpus(true)">digits in text</label>
+      <select x-model="corpus.order" @change="loadCorpus(true)"><option value="id">by id</option><option value="random">random</option></select>
+      <button class="btn sec" @click="loadCorpus(true)">Search</button>
+      <span class="spacer"></span>
+      <button class="btn sec" :disabled="corpus.offset===0" @click="corpus.offset=Math.max(0,corpus.offset-corpus.limit);loadCorpus()">‹</button>
+      <span class="small muted" x-text="(corpus.offset+1)+'–'+Math.min(corpus.total,corpus.offset+corpus.limit)"></span>
+      <button class="btn sec" :disabled="corpus.offset+corpus.limit>=corpus.total" @click="corpus.offset+=corpus.limit;loadCorpus()">›</button>
+    </div>
+    <div class="cols2" style="margin-top:10px;align-items:start">
+      <div class="scroll"><table>
+        <thead><tr><th>id</th><th>src</th><th class="num">sec</th><th class="num">dig</th><th style="text-align:right">text</th></tr></thead>
+        <tbody>
+          <template x-for="s in corpus.items" :key="s.id">
+            <tr class="click" :class="{sel: corpus.sel && corpus.sel.id===s.id}" @click="openSample(s.id)">
+              <td x-text="s.id"></td><td class="small" x-text="s.source"></td><td class="num" x-text="f(s.duration,1)"></td><td class="num" x-text="s.ref_digits"></td>
+              <td class="rtl" x-html="hlDigits(s.text.length>120 ? s.text.slice(0,120)+'…' : s.text)"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table></div>
+      <div x-show="corpus.sel" style="position:sticky;top:60px">
+        <template x-if="corpus.sel">
+          <div class="card">
+            <div class="row"><b x-text="'#'+corpus.sel.id"></b><span class="small muted" x-text="corpus.sel.source+' · '+f(corpus.sel.duration,1)+'s · '+corpus.sel.source_key"></span></div>
+            <audio controls :src="'/api/corpus/'+corpus.sel.id+'/audio'" style="width:100%;margin:8px 0"></audio>
+            <textarea class="rtl" dir="rtl" rows="5" x-model="corpus.sel.text"></textarea>
+            <div class="row" style="margin-top:6px">
+              <button class="btn" @click="saveSampleText()">Save text</button>
+              <button class="btn bad" @click="deleteSample(corpus.sel.id)">Delete</button>
+            </div>
+            <details class="small" style="margin-top:8px"><summary>meta</summary><pre class="mono" x-text="JSON.stringify(corpus.sel.meta,null,1).slice(0,1500)"></pre></details>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= PHASE 1 ======================= -->
+<section x-show="tab==='phase1'">
+  <h2>Phase 1 — does the model know both forms?</h2>
+  <p class="muted small">Decode freely; at the first digit token, rewind, ban every digit-related token and continue. A <span class="pill cardinal">cardinal</span> verdict means the replaced span became number words and the rest of the sentence stayed intact. Review verdicts by hand: <i>good</i>/<i>bad</i> override the automatic one and decide which points feed phase 2.</p>
+  <div class="card">
+    <div class="cfg" data-cfg="phase1"></div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn" @click="launch('phase1').then(j=>selectP1(j.id))">Run phase 1</button>
+      <button class="btn sec" @click="cfgs.phase1.model=settings.model_smoke;cfgs.phase1.limit=10">smoke preset (tiny, 10)</button>
+      <span class="small muted">model null → active model</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <b>Run</b>
+      <select x-model="p1.run" @change="selectP1(p1.run)">
+        <option value="">—</option>
+        <template x-for="j in byType('phase1')" :key="j.id"><option :value="j.id" x-text="j.id+' ['+j.status+']'"></option></template>
+      </select>
+      <template x-if="job(p1.run)">
+        <span class="row">
+          <span class="pill" :class="job(p1.run).status" x-text="job(p1.run).status"></span>
+          <span class="progress"><div :style="'width:'+pct(job(p1.run))+'%'"></div></span>
+          <span class="small muted" x-text="job(p1.run).progress.done+'/'+job(p1.run).progress.total"></span>
+          <button class="btn sec" x-show="job(p1.run).status==='running'" @click="cancel(p1.run)">cancel</button>
+        </span>
+      </template>
+    </div>
+    <template x-if="job(p1.run)&&job(p1.run).error"><p class="note" x-text="job(p1.run).error"></p></template>
+    <div class="row" style="margin-top:8px">
+      <span class="small muted">filter:</span>
+      <button class="btn sec" :style="p1.filter===''?'outline:2px solid var(--accent)':''" @click="p1.filter=''">all (<span x-text="p1.rows.length"></span>)</button>
+      <template x-for="[k,n] in p1counts()" :key="k"><button class="btn sec" :style="p1.filter===k?'outline:2px solid var(--accent)':''" @click="p1.filter=k"><span x-text="k+' '+n"></span></button></template>
+    </div>
+    <div class="cols2" style="margin-top:10px;align-items:start">
+      <div class="scroll"><table>
+        <thead><tr><th>#</th><th>verdict</th><th class="num">p(digit)</th><th>digit→card.</th><th style="text-align:right">baseline output</th></tr></thead>
+        <tbody>
+          <template x-for="r in p1rows()" :key="r.sample_id">
+            <tr class="click" :class="{sel:p1.sel&&p1.sel.sample_id===r.sample_id}" @click="p1.sel=r">
+              <td x-text="r.sample_id"></td>
+              <td><span class="pill" :class="eff(r)" x-text="eff(r)"></span><span class="small" x-show="r.hyphen_committed" title="a hyphen-prefix token (e.g. ב-) preceded the digit"> ⌁</span></td>
+              <td class="num" x-text="f(r.p_digit,2)"></td>
+              <td class="mono tok"><span x-text="r.digit_token ? r.digit_token.tok : ''"></span> → <span x-text="r.cardinal_token ? r.cardinal_token.tok : ''"></span></td>
+              <td class="rtl" x-html="hlDigits((r.baseline_text||'').slice(0,100))"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table></div>
+      <div style="position:sticky;top:60px">
+        <template x-if="p1.sel">
+          <div class="card">
+            <div class="row"><b x-text="'sample #'+p1.sel.sample_id"></b><span class="pill" :class="eff(p1.sel)" x-text="eff(p1.sel)"></span>
+              <span class="small muted" x-text="'auto: '+p1.sel.verdict"></span></div>
+            <audio controls :src="'/api/corpus/'+p1.sel.sample_id+'/audio'" style="width:100%;margin:8px 0"></audio>
+            <h3>reference</h3><div class="rtl" x-html="hlDigits(p1.sel.ref_text)"></div>
+            <h3>free decode</h3><div class="rtl" x-html="hlDigits(p1.sel.baseline_text)"></div>
+            <template x-if="p1.sel.has_digits">
+              <div>
+                <h3>digits suppressed from the decision point</h3>
+                <div class="small muted rtl" x-text="'prefix: '+p1.sel.prefix_text"></div>
+                <div class="rtl" x-html="hlWords(p1.sel.suppressed_text, p1.sel.diff&&p1.sel.diff.spans)"></div>
+                <template x-if="p1.sel.diff&&p1.sel.diff.spans">
+                  <table style="margin-top:6px"><tr><th>original span</th><th>replacement</th><th>number words?</th></tr>
+                    <template x-for="s in p1.sel.diff.spans"><tr><td class="rtl" x-text="s.orig"></td><td class="rtl" x-text="s.new"></td><td x-text="s.is_number_words?'yes':'no'"></td></tr></template>
+                  </table>
+                </template>
+                <div class="small muted" x-show="p1.sel.diff" x-text="'rest-of-sentence match: '+pct1(p1.sel.diff&&p1.sel.diff.rest_match)"></div>
+                <div class="cols2" style="margin-top:8px">
+                  <div><h3>top-k at decision (free)</h3>
+                    <table><template x-for="t in p1.sel.dist_free"><tr><td class="mono tok" x-text="JSON.stringify(t.tok)"></td><td class="num" x-text="f(t.p,3)"></td><td x-text="t.digit?'digit':''"></td></tr></template></table></div>
+                  <div><h3>top-k (digits banned)</h3>
+                    <table><template x-for="t in p1.sel.dist_suppressed"><tr><td class="mono tok" x-text="JSON.stringify(t.tok)"></td><td class="num" x-text="f(t.p,3)"></td></tr></template></table></div>
+                </div>
+              </div>
+            </template>
+            <div class="row" style="margin-top:10px">
+              <button class="btn good" @click="setVerdict(p1.sel,'good')">good (use in phase 2)</button>
+              <button class="btn bad" @click="setVerdict(p1.sel,'bad')">bad</button>
+              <button class="btn sec" @click="setVerdict(p1.sel,null)">clear</button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= PHASE 2 ======================= -->
+<section x-show="tab==='phase2'">
+  <h2>Phase 2 — discover upstream knobs</h2>
+  <p class="muted small">For each verified decision point: nudge the digit-vs-cardinal log-odds to the target probability, keep the top-% of the nudge, take the commonly selected params, then vote across random groups and keep what survives a permutation-null FDR threshold.</p>
+  <div class="card">
+    <h3>1 · decision points</h3>
+    <div class="row">
+      <template x-for="j in p2.p1runs" :key="j.id">
+        <label class="chk"><input type="checkbox" :checked="p2.chosen.includes(j.id)" @change="toggleP1(j.id)"><span class="mono" x-text="j.id"></span><span class="small muted" x-text="j.summary ? JSON.stringify(j.summary.verdicts) : ''"></span></label>
+      </template>
+      <span class="muted small" x-show="!p2.p1runs.length">no finished phase 1 runs</span>
+    </div>
+    <div class="row" style="margin-top:6px"><span class="small muted">accept verdicts:</span>
+      <template x-for="v in ['cardinal','partial','human_good','no_number_words']" :key="v"><label class="chk"><input type="checkbox" :checked="p2.verdicts.includes(v)" @change="toggleVerdict(v)"><span x-text="v"></span></label></template>
+      <b x-text="'→ '+(p2.usable??'…')+' usable decision points'"></b>
+    </div>
+    <h3>2 · hyperparameters</h3>
+    <div class="cfg" data-cfg="phase2"></div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn" :disabled="!p2.usable" @click="launchP2().then(j=>selectP2(j.id))">Run phase 2</button>
+      <button class="btn sec" @click="cfgs.phase2.model=settings.model_smoke;cfgs.phase2.rounds=300">smoke preset</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <b>Run</b>
+      <select x-model="p2.run" @change="selectP2(p2.run)"><option value="">—</option>
+        <template x-for="j in byType('phase2')" :key="j.id"><option :value="j.id" x-text="j.id+' ['+j.status+']'"></option></template></select>
+      <template x-if="job(p2.run)"><span class="row">
+        <span class="pill" :class="job(p2.run).status" x-text="job(p2.run).status"></span>
+        <span class="progress"><div :style="'width:'+pct(job(p2.run))+'%'"></div></span>
+        <span class="small muted" x-text="job(p2.run).message"></span>
+        <button class="btn sec" x-show="job(p2.run).status==='running'" @click="cancel(p2.run)">cancel</button></span></template>
+    </div>
+    <template x-if="job(p2.run)&&job(p2.run).error"><p class="note" x-text="job(p2.run).error"></p></template>
+
+    <template x-if="p2.summary">
+      <div>
+        <div class="row" style="margin-top:10px">
+          <template x-for="t in ['to_digits','to_cardinal']" :key="t"><button class="btn sec" :style="p2.type===t?'outline:2px solid var(--accent)':''" @click="p2.type=t;p2.candOffset=0;loadCands()" x-text="t"></button></template>
+          <span class="small muted" x-text="'decision points: '+p2.summary.decision_points+' · knobs: '+p2.summary.knobs.toLocaleString()+' · cohort sizes '+JSON.stringify(p2.summary.cohort_sizes)"></span>
+        </div>
+        <template x-if="ty()&&ty().skipped"><p class="note" x-text="ty().skipped"></p></template>
+        <template x-if="ty()&&!ty().skipped">
+          <div>
+            <div class="grid g3" style="margin:10px 0">
+              <div class="card kv">
+                <span>union / common</span><span x-text="ty().union.toLocaleString()+' / '+ty().common.toLocaleString()"></span>
+                <span>vote threshold</span><span x-text="ty().threshold_votes ?? 'none significant'"></span>
+                <span>empirical FDR</span><span x-text="f(ty().fdr_at_threshold,3)"></span>
+                <span>candidates</span><b x-text="ty().n_candidates.toLocaleString()"></b>
+              </div>
+              <div class="card kv">
+                <span>gini real / null</span><span x-text="f(ty().concentration.gini)+' / '+f(ty().concentration_null.gini)"></span>
+                <span>top-1% vote share</span><span x-text="pct1(ty().concentration.top1_share)+' (null '+pct1(ty().concentration_null.top1_share)+')'"></span>
+                <span>top-10% vote share</span><span x-text="pct1(ty().concentration.top10_share)+' (null '+pct1(ty().concentration_null.top10_share)+')'"></span>
+                <span>split-half Jaccard@1%</span><span x-text="f(ty().split_half_jaccard_top1pct,2)+' (stability)'"></span>
+              </div>
+              <div class="card">
+                <div class="small muted">vote distribution (log height): <span style="color:var(--c1)">■ real</span> <span style="color:var(--c2)">■ null</span></div>
+                <div x-html="histSvg(ty())"></div>
+              </div>
+            </div>
+            <div class="grid g2">
+              <div><h3>gradient energy share by tower</h3>
+                <template x-for="b in barList(ty().gradient_energy_by_tower)"><div class="barrow"><span x-text="b.k"></span><div><div class="bar" :style="'width:'+b.w+'%'"></div></div><span x-text="pct1(b.v)"></span></div></template>
+                <h3>candidates by tower</h3>
+                <template x-for="b in barList(ty().candidates_by_tower)"><div class="barrow"><span x-text="b.k"></span><div><div class="bar c2" :style="'width:'+b.w+'%'"></div></div><span x-text="b.v"></span></div></template>
+              </div>
+              <div><h3>top gradient-energy groups</h3>
+                <template x-for="b in barList(ty().gradient_energy_by_group,10)"><div class="barrow"><span x-text="b.k"></span><div><div class="bar" :style="'width:'+b.w+'%'"></div></div><span x-text="pct1(b.v)"></span></div></template>
+                <h3>top candidate groups</h3>
+                <template x-for="b in barList(ty().candidates_by_group,10)"><div class="barrow"><span x-text="b.k"></span><div><div class="bar c2" :style="'width:'+b.w+'%'"></div></div><span x-text="b.v"></span></div></template>
+              </div>
+            </div>
+            <h3>candidate knobs (module + index)</h3>
+            <div class="row"><button class="btn sec" :disabled="p2.candOffset===0" @click="p2.candOffset=Math.max(0,p2.candOffset-50);loadCands()">‹</button>
+              <span class="small muted" x-text="(p2.candOffset+1)+'–'+Math.min(p2.candTotal,p2.candOffset+50)+' of '+p2.candTotal.toLocaleString()"></span>
+              <button class="btn sec" :disabled="p2.candOffset+50>=p2.candTotal" @click="p2.candOffset+=50;loadCands()">›</button></div>
+            <table class="mono"><thead><tr><th>module</th><th>index</th><th class="num">votes</th><th class="num">null</th><th class="num">mean</th><th class="num">median</th><th class="num">std</th><th class="num">n</th><th class="num">sign cons.</th></tr></thead>
+              <tbody><template x-for="c in p2.cands" :key="c.flat"><tr>
+                <td x-text="c.module"></td><td x-text="'['+c.index.join(',')+']'"></td><td class="num" x-text="c.votes"></td><td class="num" x-text="c.null_votes"></td>
+                <td class="num" x-text="c.mean_present.toExponential(2)"></td><td class="num" x-text="c.median_present.toExponential(2)"></td><td class="num" x-text="c.std_present.toExponential(2)"></td>
+                <td class="num" x-text="c.count"></td><td class="num" x-text="f(c.sign_consistency,2)"></td></tr></template></tbody></table>
+          </div>
+        </template>
+      </div>
+    </template>
+  </div>
+</section>
+
+<!-- ======================= PHASE 3 ======================= -->
+<section x-show="tab==='phase3'">
+  <h2>Phase 3 — do the knobs steer the output?</h2>
+  <p class="muted small">Applies <code>strength × statistic</code> of the candidate nudge to the weights and decodes held-out utterances. Each condition has a control with the same params and the same magnitudes but shuffled values (or random params). <b>probe p(digit)</b> is measured at the phase-2 decision points (in-sample); the digit share is on held-out audio.</p>
+  <div class="card">
+    <div class="row"><b>phase 2 run</b>
+      <select x-model="p2.run"><option value="">latest done</option><template x-for="j in byType('phase2').filter(x=>x.status==='done')" :key="j.id"><option :value="j.id" x-text="j.id"></option></template></select></div>
+    <div class="cfg" data-cfg="phase3" style="margin-top:8px"></div>
+    <div class="row" style="margin-top:8px"><button class="btn" @click="launchP3().then(j=>selectP3(j.id))">Run phase 3</button></div>
+  </div>
+  <div class="card">
+    <div class="row"><b>Run</b>
+      <select x-model="p3.run" @change="selectP3(p3.run)"><option value="">—</option>
+        <template x-for="j in byType('phase3')" :key="j.id"><option :value="j.id" x-text="j.id+' ['+j.status+']'"></option></template></select>
+      <template x-if="job(p3.run)"><span class="row">
+        <span class="pill" :class="job(p3.run).status" x-text="job(p3.run).status"></span>
+        <span class="progress"><div :style="'width:'+pct(job(p3.run))+'%'"></div></span>
+        <span class="small muted" x-text="job(p3.run).message"></span>
+        <button class="btn sec" x-show="job(p3.run).status==='running'" @click="cancel(p3.run)">cancel</button></span></template>
+    </div>
+    <template x-if="job(p3.run)&&job(p3.run).error"><p class="note" x-text="job(p3.run).error"></p></template>
+    <table style="margin-top:10px"><thead><tr><th>condition</th><th class="num">strength</th><th class="num">params</th><th>digit share of number mentions</th><th class="num">digit-output rate</th><th class="num">probe p(digit)</th><th class="num">degenerate</th><th class="num">text drift</th></tr></thead>
+      <tbody><template x-for="r in p3.table" :key="r.cond+r.strength">
+        <tr :style="r.kind==='nudge'?'font-weight:600':''">
+          <td x-text="r.cond"></td><td class="num" x-text="r.strength"></td><td class="num" x-text="r.n_params??''"></td>
+          <td><div class="row"><div style="width:160px;background:var(--line);border-radius:3px"><div class="bar" :class="r.kind==='nudge'?'':'c2'" :style="'width:'+(100*(r.digit_share||0))+'%'"></div></div><span x-text="pct1(r.digit_share)"></span></div></td>
+          <td class="num" x-text="pct1(r.digit_output_rate)"></td><td class="num" x-text="f(r.probe_mean_p_digit,3)"></td>
+          <td class="num" x-text="pct1(r.degenerate_rate)"></td><td class="num" x-text="f(r.text_drift,3)"></td></tr></template></tbody></table>
+    <template x-if="Object.keys(p3.outputs).length">
+      <div style="margin-top:14px">
+        <h3>outputs per sample</h3>
+        <div class="row"><select x-model="p3.sample"><template x-for="k in Object.keys(p3.outputs)" :key="k"><option :value="k" x-text="'sample #'+k"></option></template></select>
+          <audio controls :src="'/api/corpus/'+p3.sample+'/audio'"></audio></div>
+        <table><template x-for="[c,t] in Object.entries(p3.outputs[p3.sample]||{})" :key="c"><tr><td class="mono" style="width:240px" x-text="c"></td><td class="rtl" x-html="hlDigits(t)"></td></tr></template></table>
+      </div>
+    </template>
+  </div>
+</section>
+
+<!-- ======================= JOBS ======================= -->
+<section x-show="tab==='jobs'">
+  <h2>Jobs</h2>
+  <div class="card">
+    <table><thead><tr><th>id</th><th>status</th><th>progress</th><th>time</th><th>summary / error</th><th></th></tr></thead>
+      <tbody><template x-for="j in jobs" :key="j.id"><tr>
+        <td class="mono" x-text="j.id"></td><td><span class="pill" :class="j.status" x-text="j.status"></span></td>
+        <td><span class="progress" style="display:inline-block"><div :style="'width:'+pct(j)+'%'"></div></span> <span class="small muted" x-text="j.progress.done+'/'+j.progress.total"></span></td>
+        <td class="small" x-text="fmtTime(j.created)+' '+dur(j)"></td>
+        <td class="small mono" x-text="j.error || JSON.stringify(j.summary||{}).slice(0,160)"></td>
+        <td><button class="btn sec" @click="watchLog(j.id)">log</button> <button class="btn sec" x-show="['running','queued'].includes(j.status)" @click="cancel(j.id)">cancel</button></td></tr></template></tbody></table>
+    <template x-if="logJob"><div><h3 x-text="'log: '+logJob"></h3><pre class="log" id="logbox" x-text="logText"></pre></div></template>
+  </div>
+</section>
+
+<!-- ======================= KNOWLEDGE ======================= -->
+<section x-show="tab==='knowledge'">
+  <h2>Knowledge <span class="small muted">(OKF bundle in <code>knowledge/</code>)</span></h2>
+  <div class="cols2" style="grid-template-columns:320px 1fr;align-items:start">
+    <div class="card"><template x-for="d in kn.list" :key="d.path">
+      <div style="margin-bottom:8px;cursor:pointer" @click="openDoc(d.path)"><div><b x-text="d.title"></b> <span class="pill small" x-show="d.type" x-text="d.type"></span> <span class="pill small" x-show="d.status" x-text="d.status"></span></div>
+      <div class="small muted" x-text="d.description || d.path"></div></div></template></div>
+    <div class="card md" x-show="kn.doc">
+      <template x-if="kn.doc"><div><div class="small muted mono" x-text="kn.doc.path"></div><div x-html="md(kn.doc.body)"></div></div></template>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<template id="cfgform">
+  <template x-for="k in fields('__T__')" :key="k">
+    <label class="f" :title="HELP[k]||''">
+      <span x-text="k"></span>
+      <template x-if="kind('__T__',k)==='select'"><select x-model="cfgs['__T__'][k]"><template x-for="o in OPTIONS[k]" :key="o"><option x-text="o"></option></template></select></template>
+      <template x-if="kind('__T__',k)==='bool'"><input type="checkbox" x-model="cfgs['__T__'][k]"></template>
+      <template x-if="kind('__T__',k)==='number'"><input type="number" step="any" x-model.number="cfgs['__T__'][k]"></template>
+      <template x-if="kind('__T__',k)==='array'"><input type="text" :value="arrText('__T__',k)" @change="setArr('__T__',k,$event.target.value)"></template>
+      <template x-if="kind('__T__',k)==='text'"><input type="text" :value="arrText('__T__',k)" @change="setText('__T__',k,$event.target.value)"></template>
+    </label>
+  </template>
+</template>
+<script>
+  // expand <div data-cfg="TYPE"> placeholders with the shared config-form template (runs before Alpine starts)
+  const tpl = document.getElementById('cfgform');
+  document.querySelectorAll('[data-cfg]').forEach(el => {
+    const t = el.dataset.cfg;
+    el.innerHTML = tpl.innerHTML.replaceAll('__T__', t);
+  });
+</script>
+</body>
+</html>
