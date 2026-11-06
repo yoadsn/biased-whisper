@@ -22,7 +22,18 @@ The site requires **Google login**; unauthenticated requests redirect to `/xhost
    (`results_path`, `text`, `id`, `start`, `end`, `audio_url_key`), then *Fetch batch* (`seed`, `limit`).
 4. Seed strategy: first batch of ~40 for a seed, change seed, repeat; duplicates are skipped by `(source, id@start-end)`.
 
-Status: client implemented, **not yet exercised against the live API** (no cookie available when it was written).
+Status: working. Real API (verified):
+
+* `GET /api/search?q=%5Cd&mode=regex&page=<1-based>&per_page=50&shuffle=true&seed=<n>` returns `{has_more, total_hits, episodes: [...]}`;
+  each episode has `uuid, source, title, date, duration_sec, hits: [...]`; **one hit per matched character**, so segments repeat and are
+  deduplicated by `(uuid, segment_idx)`. `HEAD` on audio is not allowed (405); `GET /audio/<uuid>.opus` supports Range (206).
+* Episodes are 3-60 minutes of Ogg/Opus (~31 kbit/s, ~12 MB per hour). `ffmpeg -ss ... -i <url>` costs 9-12 s per crop (bisection over
+  many round-trips), so the adapter groups segments by episode, runs 4 episodes in parallel on keep-alive connections, Range-fetches
+  the Ogg headers plus a ~300 KB window around each segment, parses Ogg page granules itself, assembles a mini Ogg and decodes it
+  locally. Result: 0.17 s and 230 KB per sample (354 samples/min); the old path was 9 s per sample. `mode="episode"` (whole-file
+  download, 3.9 MB/sample, 0.45 s/sample) is the fallback. Validated against the slow path on 5 clips (correlation 1.000).
+* Job `corpus_fetch_explore`: `seeds`, `per_seed`, `target`, `per_episode` (6), `pad`, `mode`, `workers`. 1,300 clips, 285 episodes,
+  median 3.5 s, all with digits and Hebrew text.
 
 # Offline HF-cache source (`hf_cache`)
 

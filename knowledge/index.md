@@ -27,3 +27,4 @@ okf_version: "0.2"
 * [2026-11-06 Phase 1.5 style patterns](findings/2026-11-06-phase1-5-style-patterns.md) - prefixes, hyphens, units and magnitude words around digits
 * [2026-11-06 budget sweep](findings/2026-11-06-budget-sweep-small.md) - how many parameters the signal needs
 * [2026-11-06 Phase 2N neuron edits](findings/2026-11-06-phase2n-neuron-edits.md) - where the decision lives, and 64-neuron edits on held-out audio
+* [2026-11-06 cross-domain transfer](findings/2026-11-06-cross-domain-transfer.md) - Knesset-fit edits evaluated on explore.ivrit.ai audio

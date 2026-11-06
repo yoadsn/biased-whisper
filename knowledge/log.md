@@ -1,6 +1,7 @@
 # Knowledge Update Log
 
 ## 2026-11-06
+* **Creation**: [Cross-domain transfer finding](/findings/2026-11-06-cross-domain-transfer.md); explore.ivrit.ai corpus pulled (1,300 clips) with an episode-grouped parallel Range fetch (0.17 s/sample, 230 KB/sample), see [Corpus sources](/reference/corpus-sources.md).
 * **Update**: Knob space default is now all weights and biases (`all_no_embed`); "bias" in the brief meant influence, not bias vectors. Tied-embedding readout explained in the [Review](/theory/review-of-approach.md).
 * **Update**: [Review](/theory/review-of-approach.md) - measured that linear nudges are exactly antiparallel and iterative ones diverge (cos -0.75 to -0.96).
 * **Creation**: [Approach v2](/plan/approach-v2.md) (style span, sequence contrast, component attribution).
