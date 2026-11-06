@@ -121,7 +121,12 @@
       </template>
       <template x-if="corpus.probe"><pre class="log" x-text="JSON.stringify(corpus.probe,null,1)"></pre></template>
       <div class="cfg" data-cfg="corpus_fetch_explore" style="margin-top:8px"></div>
-      <button class="btn" style="margin-top:8px" @click="launch('corpus_fetch_explore')">Fetch batch from explore</button>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" @click="launch('corpus_fetch_explore')">Fetch batch from explore</button>
+        <template x-if="byType('corpus_fetch_explore')[0]">
+          <span class="small muted">latest: <span class="pill" :class="byType('corpus_fetch_explore')[0].status" x-text="byType('corpus_fetch_explore')[0].status"></span> <span class="mono" x-text="byType('corpus_fetch_explore')[0].message || ''"></span></span>
+        </template>
+      </div>
     </div>
   </div>
 
@@ -143,7 +148,14 @@
         <tbody>
           <template x-for="s in corpus.items" :key="s.id">
             <tr class="click" :class="{sel: corpus.sel && corpus.sel.id===s.id}" @click="openSample(s.id)">
-              <td x-text="s.id"></td><td class="small" x-text="s.source"></td><td class="num" x-text="f(s.duration,1)"></td><td class="num" x-text="s.ref_digits"></td>
+              <td x-text="s.id"></td>
+              <td class="small">
+                <div x-text="s.source"></div>
+                <template x-if="s.source==='explore' && s.meta && (s.meta.title || s.meta.source)">
+                  <div class="rtl small muted" style="font-size:11px;line-height:1.3" x-text="((s.meta.source ? s.meta.source + ': ' : '') + (s.meta.title || '')).slice(0, 42)"></div>
+                </template>
+              </td>
+              <td class="num" x-text="f(s.duration,1)"></td><td class="num" x-text="s.ref_digits"></td>
               <td class="rtl" x-html="hlDigits(s.text.length>120 ? s.text.slice(0,120)+'…' : s.text)"></td>
             </tr>
           </template>
@@ -153,6 +165,13 @@
         <template x-if="corpus.sel">
           <div class="card">
             <div class="row"><b x-text="'#'+corpus.sel.id"></b><span class="small muted" x-text="corpus.sel.source+' · '+f(corpus.sel.duration,1)+'s · '+corpus.sel.source_key"></span></div>
+            <template x-if="corpus.sel.source==='explore' && corpus.sel.meta">
+              <div class="kv small" style="margin:6px 0;padding:6px 8px;background:var(--bg);border-radius:6px">
+                <span>title</span><span class="rtl" style="font-size:13px" x-text="corpus.sel.meta.title || '—'"></span>
+                <span>source / date</span><span class="rtl" style="font-size:12px" x-text="(corpus.sel.meta.source || '—') + (corpus.sel.meta.date ? ' · ' + corpus.sel.meta.date : '')"></span>
+                <span>episode / seg</span><span class="mono" x-text="(corpus.sel.meta.uuid || '—') + ' #' + (corpus.sel.meta.segment_idx ?? '—')"></span>
+              </div>
+            </template>
             <audio controls :src="'/api/corpus/'+corpus.sel.id+'/audio'" style="width:100%;margin:8px 0"></audio>
             <textarea class="rtl" dir="rtl" rows="5" x-model="corpus.sel.text"></textarea>
             <div class="row" style="margin-top:6px">
@@ -204,12 +223,13 @@
     </div>
     <div class="cols2" style="margin-top:10px;align-items:start">
       <div class="scroll"><table>
-        <thead><tr><th>#</th><th>verdict</th><th class="num">p(digit)</th><th>digit→card.</th><th style="text-align:right">baseline output</th></tr></thead>
+        <thead><tr><th>#</th><th>verdict</th><th class="num">span off.</th><th class="num">p(digit)</th><th>digit→card.</th><th style="text-align:right">baseline output</th></tr></thead>
         <tbody>
           <template x-for="r in p1rows()" :key="r.sample_id">
             <tr class="click" :class="{sel:p1.sel&&p1.sel.sample_id===r.sample_id}" @click="p1.sel=r">
               <td x-text="r.sample_id"></td>
               <td><span class="pill" :class="eff(r)" x-text="eff(r)"></span><span class="small" x-show="r.hyphen_committed" title="a hyphen-prefix token (e.g. ב-) preceded the digit"> ⌁</span></td>
+              <td class="num mono" x-text="r.span_offset ?? ''"></td>
               <td class="num" x-text="f(r.p_digit,2)"></td>
               <td class="mono tok"><span x-text="r.digit_token ? r.digit_token.tok : ''"></span> → <span x-text="r.cardinal_token ? r.cardinal_token.tok : ''"></span></td>
               <td class="rtl" x-html="hlDigits((r.baseline_text||'').slice(0,100))"></td>
@@ -227,6 +247,21 @@
             <h3>free decode</h3><div class="rtl" x-html="hlDigits(p1.sel.baseline_text)"></div>
             <template x-if="p1.sel.has_digits">
               <div>
+                <template x-if="p1.sel.span_mode">
+                  <div class="card" style="margin:8px 0;padding:10px">
+                    <h3>style span</h3>
+                    <div class="small muted mono">
+                      decision: <b x-text="p1.sel.decision_index ?? '—'"></b> ·
+                      rewind: <b x-text="p1.sel.rewind_index ?? '—'"></b> ·
+                      first-digit: <b x-text="p1.sel.first_digit_index ?? '—'"></b> ·
+                      span_offset: <b x-text="p1.sel.span_offset ?? '—'"></b>
+                    </div>
+                    <div class="cols2" style="margin-top:6px">
+                      <div class="rtl" x-text="'digit path: ' + (p1.sel.div_digit_text ?? '')"></div>
+                      <div class="rtl" x-text="'word path: ' + (p1.sel.div_cardinal_text ?? '')"></div>
+                    </div>
+                  </div>
+                </template>
                 <h3>digits suppressed from the decision point</h3>
                 <div class="small muted rtl" x-text="'prefix: '+p1.sel.prefix_text"></div>
                 <div class="rtl" x-html="hlWords(p1.sel.suppressed_text, p1.sel.diff&&p1.sel.diff.spans)"></div>
@@ -253,6 +288,211 @@
         </template>
       </div>
     </div>
+  </div>
+</section>
+
+<!-- ======================= PHASE 1.5 ======================= -->
+<section x-show="tab==='phase1.5'">
+  <h2>Phase 1.5 — satellite tokens &amp; number-style edit patterns</h2>
+  <p class="muted small">Statistically discovers satellite tokens (prefixes, hyphens, units) around digit spans and word-level edit patterns between digit and cardinal realizations.</p>
+  <div class="card">
+    <div class="cfg" data-cfg="phase1_5"></div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn" @click="launch('phase1_5').then(j=>selectP15(j.id))">Run phase 1.5</button>
+      <span class="small muted">phase1_runs empty → all done phase1 runs · model null → from phase1 rows</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <b>Run</b>
+      <select x-model="p15.run" @change="selectP15(p15.run)"><option value="">—</option>
+        <template x-for="j in byType('phase1_5')" :key="j.id"><option :value="j.id" x-text="j.id+' ['+j.status+']'"></option></template></select>
+      <template x-if="job(p15.run)"><span class="row">
+        <span class="pill" :class="job(p15.run).status" x-text="job(p15.run).status"></span>
+        <span class="progress"><div :style="'width:'+pct(job(p15.run))+'%'"></div></span>
+        <span class="small muted" x-text="job(p15.run).message"></span>
+        <button class="btn sec" x-show="job(p15.run).status==='running'" @click="cancel(p15.run)">cancel</button></span></template>
+    </div>
+    <template x-if="job(p15.run)&&job(p15.run).error"><p class="note" x-text="job(p15.run).error"></p></template>
+
+    <template x-if="p15.summary">
+      <div style="margin-top:10px">
+        <div class="row small muted" style="margin-bottom:10px">
+          <span>model: <b x-text="p15.summary.model"></b></span> ·
+          <span>samples: <b x-text="p15.summary.samples"></b></span> ·
+          <span>valid pairs: <b x-text="p15.summary.valid_pairs"></b></span> ·
+          <span>digit spans: <b x-text="p15.summary.digit_spans"></b></span> ·
+          <span>hyphen_before_share: <b x-text="pct1(p15.summary.hyphen_before_share)"></b></span>
+        </div>
+
+        <div class="grid g2">
+          <div class="card">
+            <h3>edit_patterns (baseline ⇒ suppressed)</h3>
+            <div class="scroll" style="max-height:420px">
+              <table>
+                <thead><tr><th>orig ⇒ new pattern</th><th class="num">count</th><th class="num">share</th><th>examples</th></tr></thead>
+                <tbody>
+                  <template x-for="ep in (p15.summary.edit_patterns||[])" :key="ep.pattern">
+                    <tr>
+                      <td class="rtl tok"><span x-text="ep.orig_pattern"></span> ⇒ <span x-text="ep.new_pattern"></span></td>
+                      <td class="num" x-text="ep.count"></td>
+                      <td class="num" x-text="pct1(ep.share)"></td>
+                      <td class="small">
+                        <template x-for="ex in (ep.examples||[])" :key="ex.sample_id+ex.orig">
+                          <div class="rtl"><span class="muted" x-text="'#'+ex.sample_id+': '"></span><span x-text="ex.orig"></span> → <span x-text="ex.new"></span></div>
+                        </template>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>satellites &amp; pre_digit_chains</h3>
+            <div class="small muted" style="margin-bottom:6px">
+              hyphen_before_share: <b x-text="pct1(p15.summary.hyphen_before_share)"></b>
+            </div>
+            <div class="cols2">
+              <div>
+                <h4>satellites before (-1, -2)</h4>
+                <table>
+                  <thead><tr><th>off</th><th>tok</th><th class="num">cnt</th><th class="num">share</th><th class="num">z</th></tr></thead>
+                  <tbody>
+                    <template x-for="s in (p15.summary.satellites?.before||[])" :key="s.offset+'-'+s.id">
+                      <tr>
+                        <td class="mono" x-text="s.offset"></td>
+                        <td class="rtl tok" x-text="JSON.stringify(s.tok)"></td>
+                        <td class="num" x-text="s.count"></td>
+                        <td class="num" x-text="pct1(s.share)"></td>
+                        <td class="num" x-text="f(s.z,2)"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+                <h4 style="margin-top:10px">satellites after (+1)</h4>
+                <table>
+                  <thead><tr><th>off</th><th>tok</th><th class="num">cnt</th><th class="num">share</th><th class="num">z</th></tr></thead>
+                  <tbody>
+                    <template x-for="s in (p15.summary.satellites?.after||[])" :key="s.offset+'-'+s.id">
+                      <tr>
+                        <td class="mono" x-text="'+'+s.offset"></td>
+                        <td class="rtl tok" x-text="JSON.stringify(s.tok)"></td>
+                        <td class="num" x-text="s.count"></td>
+                        <td class="num" x-text="pct1(s.share)"></td>
+                        <td class="num" x-text="f(s.z,2)"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+              <div>
+                <h4>pre_digit_chains (top 2-tok)</h4>
+                <div class="scroll" style="max-height:320px">
+                  <table>
+                    <thead><tr><th>[-2, -1]</th><th class="num">cnt</th><th class="num">share</th></tr></thead>
+                    <tbody>
+                      <template x-for="(c, idx) in (p15.summary.pre_digit_chains||[])" :key="idx">
+                        <tr>
+                          <td class="rtl tok" x-text="JSON.stringify(c.chain[0]) + ' , ' + JSON.stringify(c.chain[1])"></td>
+                          <td class="num" x-text="c.count"></td>
+                          <td class="num" x-text="pct1(c.share)"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid g2">
+          <div class="card">
+            <h3>word_prefix_realization (source × prefix × form)</h3>
+            <div class="scroll" style="max-height:380px">
+              <table>
+                <thead><tr><th>source</th><th>prefix</th><th class="num">hyphen_digit</th><th class="num">glued_digit</th><th class="num">bare_digit</th><th class="num">fused_word</th><th class="num">bare_word</th></tr></thead>
+                <tbody>
+                  <template x-for="[src, pmap] in Object.entries(p15.summary.word_prefix_realization||{})" :key="src">
+                    <template x-for="[pref, fmap] in Object.entries(pmap)" :key="src+'-'+pref">
+                      <tr>
+                        <td class="mono" x-text="src"></td>
+                        <td class="rtl tok" x-text="pref || '(bare)'"></td>
+                        <td class="num" x-text="fmap.hyphen_digit || 0"></td>
+                        <td class="num" x-text="fmap.glued_digit || 0"></td>
+                        <td class="num" x-text="fmap.bare_digit || 0"></td>
+                        <td class="num" x-text="fmap.fused_word || 0"></td>
+                        <td class="num" x-text="fmap.bare_word || 0"></td>
+                      </tr>
+                    </template>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>unit_after</h3>
+            <div class="row" style="margin-bottom:6px">
+              <template x-for="src in Object.keys(p15.summary.unit_after||{})" :key="src">
+                <button class="btn sec" :style="p15.unitSrc===src?'outline:2px solid var(--accent)':''" @click="p15.unitSrc=src" x-text="src"></button>
+              </template>
+            </div>
+            <div class="cols2">
+              <template x-for="st in ['digit','word']" :key="st">
+                <div>
+                  <h4 x-text="'after ' + st"></h4>
+                  <div class="scroll" style="max-height:300px">
+                    <table>
+                      <thead><tr><th>unit / next word</th><th class="num">cnt</th><th class="num">share</th></tr></thead>
+                      <tbody>
+                        <template x-for="u in ((p15.summary.unit_after?.[p15.unitSrc]?.[st])||[])" :key="u.unit">
+                          <tr>
+                            <td class="rtl tok" x-text="u.unit"></td>
+                            <td class="num" x-text="u.count"></td>
+                            <td class="num" x-text="pct1(u.share)"></td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>token_offsets (Fightin' Words log-odds z vs background)</h3>
+          <div class="grid g3">
+            <template x-for="[off, items] in Object.entries(p15.summary.token_offsets||{})" :key="off">
+              <div>
+                <h4 class="mono" x-text="'offset ' + off"></h4>
+                <div class="scroll" style="max-height:280px">
+                  <table>
+                    <thead><tr><th>id</th><th>tok</th><th class="num">cnt</th><th class="num">share</th><th class="num">z</th></tr></thead>
+                    <tbody>
+                      <template x-for="it in items" :key="it.id">
+                        <tr>
+                          <td class="mono num" x-text="it.id"></td>
+                          <td class="rtl tok" x-text="JSON.stringify(it.tok)"></td>
+                          <td class="num" x-text="it.count"></td>
+                          <td class="num" x-text="pct1(it.share)"></td>
+                          <td class="num" x-text="f(it.z,2)"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </template>
   </div>
 </section>
 
@@ -343,6 +583,110 @@
                 <td class="num" x-text="c.count"></td><td class="num" x-text="f(c.sign_consistency,2)"></td></tr></template></tbody></table>
           </div>
         </template>
+      </div>
+    </template>
+  </div>
+</section>
+
+<!-- ======================= BUDGET ======================= -->
+<section x-show="tab==='budget'">
+  <h2>Budget sweep — how many parameters does the signal need?</h2>
+  <p class="muted small">Sweeps per-sample budget <code>k</code> across log-spaced fractions of the knob space, measuring captured gradient energy (<code>energy_raw</code>, <code>energy_sel</code>), in-sample linear response (<code>self_real</code>), and held-out consensus transfer (<code>xfer_cos</code>, <code>xfer_real</code> vs shuffled control <code>xfer_shuf</code>).</p>
+  <div class="card">
+    <h3>1 · phase 1 runs</h3>
+    <div class="row">
+      <template x-for="j in bud.p1runs" :key="j.id">
+        <label class="chk"><input type="checkbox" :checked="bud.chosen.includes(j.id)" @change="toggleBudP1(j.id)"><span class="mono" x-text="j.id"></span><span class="small muted" x-text="j.summary ? JSON.stringify(j.summary.verdicts) : ''"></span></label>
+      </template>
+      <span class="muted small" x-show="!bud.p1runs.length">no finished phase 1 runs</span>
+    </div>
+    <h3>2 · hyperparameters</h3>
+    <div class="cfg" data-cfg="budget_sweep"></div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn" :disabled="!bud.chosen.length" @click="launchBud().then(j=>selectBud(j.id))">Run budget sweep</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <b>Run</b>
+      <select x-model="bud.run" @change="selectBud(bud.run)"><option value="">—</option>
+        <template x-for="j in byType('budget_sweep')" :key="j.id"><option :value="j.id" x-text="j.id+' ['+j.status+']'"></option></template></select>
+      <template x-if="job(bud.run)"><span class="row">
+        <span class="pill" :class="job(bud.run).status" x-text="job(bud.run).status"></span>
+        <span class="progress"><div :style="'width:'+pct(job(bud.run))+'%'"></div></span>
+        <span class="small muted" x-text="job(bud.run).message"></span>
+        <button class="btn sec" x-show="job(bud.run).status==='running'" @click="cancel(bud.run)">cancel</button></span></template>
+    </div>
+    <template x-if="job(bud.run)&&job(bud.run).error"><p class="note" x-text="job(bud.run).error"></p></template>
+
+    <template x-if="bud.summary">
+      <div style="margin-top:10px">
+        <div class="row small muted" style="margin-bottom:10px">
+          <span>model: <b x-text="bud.summary.model"></b></span> ·
+          <span>param_filter: <b x-text="bud.summary.param_filter"></b></span> ·
+          <span>knobs: <b x-text="(bud.summary.knobs||0).toLocaleString()"></b></span> ·
+          <span>direction: <b x-text="bud.summary.direction"></b></span> ·
+          <span>train / test: <b x-text="bud.summary.train + ' / ' + bud.summary.test"></b></span>
+        </div>
+
+        <div class="grid g2">
+          <div class="card">
+            <h3>energy captured</h3>
+            <div class="small muted" style="margin-bottom:4px">
+              <span style="color:var(--c1)">■ energy_raw (±std)</span> ·
+              <span style="color:var(--c2)">■ energy_sel (±std)</span>
+            </div>
+            <div x-html="budEnergySvg(bud.summary)"></div>
+          </div>
+          <div class="card">
+            <h3>held-out effect (log-odds change)</h3>
+            <div class="small muted" style="margin-bottom:4px">
+              <span style="color:var(--c1)">■ xfer_real (±std)</span> ·
+              <span style="color:var(--c2)">■ xfer_shuf (shuffled control, ±std)</span>
+            </div>
+            <div x-html="budXferSvg(bud.summary)"></div>
+          </div>
+        </div>
+
+        <div class="scroll">
+          <table class="mono">
+            <thead>
+              <tr>
+                <th class="num">k</th>
+                <th class="num">fraction</th>
+                <th class="num">MB / sample</th>
+                <th class="num">energy_raw</th>
+                <th class="num">energy_sel</th>
+                <th class="num">self_real</th>
+                <th class="num">xfer_cos</th>
+                <th class="num">xfer_real ± std</th>
+                <th class="num">xfer_shuf</th>
+                <th class="num">enc share</th>
+                <th class="num">edit l2</th>
+                <th class="num">edit rms/param</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="r in (bud.summary.curve||[])" :key="r.k">
+                <tr>
+                  <td class="num" x-text="(r.k||0).toLocaleString()"></td>
+                  <td class="num" x-text="fmtFrac(r.fraction)"></td>
+                  <td class="num" x-text="f((r.bytes_per_sample||0)/1e6, 2)"></td>
+                  <td class="num" x-text="f(r.energy_raw?.mean, 3)"></td>
+                  <td class="num" x-text="f(r.energy_sel?.mean, 3)"></td>
+                  <td class="num" x-text="f(r.self_real?.mean, 3)"></td>
+                  <td class="num" x-text="f(r.xfer_cos?.mean, 3)"></td>
+                  <td class="num" x-text="f(r.xfer_real?.mean, 2) + ' ± ' + f(r.xfer_real?.std, 2)"></td>
+                  <td class="num" x-text="f(r.xfer_shuf?.mean, 2) + ' ± ' + f(r.xfer_shuf?.std, 2)"></td>
+                  <td class="num" x-text="pct1(r.consensus_encoder_share)"></td>
+                  <td class="num" x-text="r.xfer_edit_l2 != null ? f(r.xfer_edit_l2, 3) : '—'"></td>
+                  <td class="num" x-text="r.xfer_edit_rms_per_param != null ? r.xfer_edit_rms_per_param.toExponential(2) : '—'"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
       </div>
     </template>
   </div>

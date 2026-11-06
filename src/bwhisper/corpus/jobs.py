@@ -1,7 +1,20 @@
 from __future__ import annotations
 
+import random
+import time
+
 from ..jobs import Ctx, register
 from . import explore, hf_cache
+
+EXPLORE_FETCH_DEFAULTS = {
+    "seeds": [234608111],
+    "per_seed": 120,
+    "target": 40,
+    "per_episode": 6,
+    "pad": 0.25,
+    "mode": "range",
+    "workers": 4,
+}
 
 
 @register("corpus_import_hf", kind="io",
@@ -14,7 +27,77 @@ def import_hf(ctx: Ctx, cfg: dict) -> dict:
     )
 
 
-@register("corpus_fetch_explore", kind="io", defaults={"seed": 234608111, "limit": 40})
+@register("corpus_fetch_explore", kind="io", defaults=EXPLORE_FETCH_DEFAULTS)
 def fetch_explore(ctx: Ctx, cfg: dict) -> dict:
-    return explore.fetch_batch(int(cfg["seed"]), int(cfg["limit"]), log=ctx.log,
-                               should_stop=ctx.should_stop, progress=ctx.progress)
+    raw_seeds = cfg.get("seeds")
+    if isinstance(raw_seeds, (int, str)):
+        base_seeds = [int(s.strip()) for s in str(raw_seeds).split(",") if s.strip()]
+    elif isinstance(raw_seeds, list) and raw_seeds:
+        base_seeds = [int(s) for s in raw_seeds]
+    else:
+        base_seeds = list(EXPLORE_FETCH_DEFAULTS["seeds"])
+
+    per_seed = max(1, int(cfg.get("per_seed", 120)))
+    target = max(1, int(cfg.get("target", 40)))
+    per_episode = max(1, int(cfg.get("per_episode", 6)))
+    pad = float(cfg.get("pad", 0.25))
+    mode = str(cfg.get("mode") or "range")
+    workers = max(1, int(cfg.get("workers", 4)))
+
+    rng = random.Random(base_seeds[-1])
+    seed_queue = list(base_seeds)
+    seen_seeds = set(seed_queue)
+
+    total_added = 0
+    total_dup = 0
+    total_episodes = 0
+    total_bytes = 0
+    seeds_used: list[int] = []
+    t0 = time.time()
+
+    ctx.progress(0, target, f"starting explore fetch ({mode}, {workers} workers)")
+    while total_added < target and len(seeds_used) < 100 and not ctx.should_stop():
+        if not seed_queue:
+            nxt = rng.randint(100_000_000, 999_999_999)
+            while nxt in seen_seeds:
+                nxt = rng.randint(100_000_000, 999_999_999)
+            seen_seeds.add(nxt)
+            seed_queue.append(nxt)
+
+        seed = seed_queue.pop(0)
+        want = min(per_seed, target - total_added)
+        base_done = total_added
+
+        res = explore.fetch_episodes_batch(
+            seed=seed,
+            n=want,
+            per_episode=per_episode,
+            pad=pad,
+            mode=mode,
+            workers=workers,
+            log=ctx.log,
+            should_stop=ctx.should_stop,
+            progress=lambda a, _b, bd=base_done, s=seed: ctx.progress(
+                bd + a, target, f"seed {s} ({bd + a}/{target})"
+            ),
+        )
+        seeds_used.append(seed)
+        total_added += int(res.get("added", 0))
+        total_dup += int(res.get("duplicates_skipped", 0))
+        total_episodes += int(res.get("episodes_seen", 0))
+        total_bytes += int(res.get("bytes_transferred", 0))
+        ctx.progress(total_added, target, f"seed {seed} done ({total_added}/{target})")
+
+    elapsed = max(1e-3, time.time() - t0)
+    return {
+        "added": total_added,
+        "duplicates_skipped": total_dup,
+        "seeds_used": seeds_used,
+        "episodes_seen": total_episodes,
+        "mode": mode,
+        "workers": workers,
+        "bytes_transferred": total_bytes,
+        "bytes_per_sample": round(total_bytes / total_added, 1) if total_added else 0.0,
+        "sec_per_sample": round(elapsed / total_added, 3) if total_added else 0.0,
+        "elapsed_sec": round(elapsed, 2),
+    }
