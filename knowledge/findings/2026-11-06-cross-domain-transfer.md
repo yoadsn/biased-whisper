@@ -48,3 +48,39 @@ lectures, podcasts, university courses and radio; none of that audio, speaker or
 
 [^corpus]: explore.ivrit.ai corpus (1,300 clips, 285 episodes)
 [^fit]: Phase 2N run on Knesset decision points
+
+# Reverse direction and agreement of independent fits
+
+Phase 1 v2 on all 1,300 explore clips: 895 contained digits, 803 (90%) gave a clean word path, 13 degenerate. Phase 2N was then fit on
+**400 explore points only** (run `phase2n-20261106-145905-dd42`) and compared with the Knesset-only fit (91 points):
+
+| agreement of two independent fits (74,160 units) | value |
+|---|---:|
+| Pearson correlation of mean per-unit attribution | 0.87 (Spearman 0.59) |
+| top-100 units by effect: overlap / chance / sign agreement | 71 / 0.1 / 100% |
+| top-1000 units: overlap / chance / sign agreement | 663 / 13.5 / 95% |
+| best steering layer | 10 and 10 |
+| cosine between steering directions per decoder layer | 0.72 to 0.86 (peak 0.86 at layers 7-9) |
+
+The same units top both lists (decoder layer 10 cross-attention heads 3 and 9, layer 10 self-attention head 1, layer 11 neuron 1746,
+layer 9 neuron 2193). The decision is localised, not an artifact of one corpus.
+
+**Explore-fit edits evaluated on 60 held-out Knesset clips** (baseline digit share 53%), strength / digit share / drift; controls are
+shuffled values and same values on random parameters:
+
+| edit | 0.3 | 1 | 3 |
+|---|---|---|---|
+| 64 neurons -> words | 48% / 0.02 | **39%** / 0.03 | **17%** / 0.12 |
+| 64 neurons -> digits | 56% / 0.03 | 59% / 0.07 | 63% / 0.13 |
+| steering -> words | **33%** / 0.08 | **10%** / 0.17 | 0%, collapses (95% degenerate) |
+| steering -> digits | 57% / 0.07 | 75% / 0.22 | 98%, collapses (98% degenerate) |
+| shuffled controls (range) | 51-55% / 0.01-0.04 | 52-58% / 0.02-0.11 | 52-64% / 0.05-0.32 |
+| random-parameter controls (range) | 53-55% / 0.00-0.01 | 52-55% / 0.00-0.05 | 38-51% / 0.00-0.70* |
+
+*the only non-flat random control is the strength-3 steering vector placed on random parameters (a 6-norm bias on arbitrary
+`fc2.bias`/other entries damages the model); it reflects the size of the edit, not the direction.
+
+* The neuron edit is the cleanest tool: at strength 1 it moves the share by 14 points with drift 0.03, at 3 by 36 points with drift 0.12,
+  and no collapse. It moves toward words much more easily than toward digits (the model already prefers digits on most numbers).
+* **Steering must stay <= 1** (it adds the same vector at every position); at 3 the decoder collapses.
+* Both fits transfer in both directions across domains, so a single edit can be shipped for general Hebrew.

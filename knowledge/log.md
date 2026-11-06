@@ -1,6 +1,7 @@
 # Knowledge Update Log
 
 ## 2026-11-06
+* **Update**: [Cross-domain finding](/findings/2026-11-06-cross-domain-transfer.md) extended: explore-fit vs Knesset-fit agree (r = 0.87, 71 of top 100 units shared) and transfer both ways.
 * **Creation**: [Cross-domain transfer finding](/findings/2026-11-06-cross-domain-transfer.md); explore.ivrit.ai corpus pulled (1,300 clips) with an episode-grouped parallel Range fetch (0.17 s/sample, 230 KB/sample), see [Corpus sources](/reference/corpus-sources.md).
 * **Update**: Knob space default is now all weights and biases (`all_no_embed`); "bias" in the brief meant influence, not bias vectors. Tied-embedding readout explained in the [Review](/theory/review-of-approach.md).
 * **Update**: [Review](/theory/review-of-approach.md) - measured that linear nudges are exactly antiparallel and iterative ones diverge (cos -0.75 to -0.96).

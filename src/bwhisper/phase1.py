@@ -245,7 +245,7 @@ def run_phase1(ctx: Ctx, cfg: dict) -> dict:
         r.update({"sample_id": s["id"], "ref_text": s["text"], "duration": s["duration"], "model": L.name})
         ctx.append_jsonl("results.jsonl", r)
         verdicts[r["verdict"]] += 1
-        if r.get("has_digits"):
+        if r.get("has_digits") and r.get("p_digit") is not None:
             p_digits.append(r["p_digit"])
         ctx.log(f"#{s['id']} {r['verdict']}: {r.get('baseline_text', '')[:60]}")
     ctx.progress(len(samples), len(samples))
