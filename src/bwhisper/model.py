@@ -112,16 +112,25 @@ def load_model(name: str | None = None, device: str | None = None, extra_digit_c
         return L
 
 
-def unload_all() -> None:
+def unload_all() -> dict:
     with _lock:
+        devices = {loaded.device for loaded in _cache.values()}
+        count = len(_cache)
         _cache.clear()
     import gc
 
     gc.collect()
     if torch.backends.mps.is_available():
         torch.mps.empty_cache()
+    memory = []
     if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+        for device in devices:
+            if str(device).startswith("cuda"):
+                with torch.cuda.device(device):
+                    torch.cuda.empty_cache()
+                    memory.append({"device": device, "allocated_bytes": torch.cuda.memory_allocated(device),
+                                   "reserved_bytes": torch.cuda.memory_reserved(device)})
+    return {"released_models": count, "cuda_memory": memory}
 
 
 def unload_unused(keep: Loaded) -> int:

@@ -22,9 +22,13 @@ okf_version: "0.2"
 * [Corpus sources](reference/corpus-sources.md) - explore.ivrit.ai and the offline HF-cache source
 * [A40 server preparation](reference/server-setup.md) - aligned manifests, CUDA environment, eight-device Phase 1 and frozen recording-disjoint cohorts
 * [GPU-native Phase 2 capture](reference/phase2-gpu-capture.md) - sparse device selection, CPU-reference benchmark, preserved-capture resume and timing artifacts
+* [Interactive Test tab](reference/interactive-test.md) - local mic/upload comparisons, independent edit configs, baseline restoration and a reused CUDA model
 
 # Findings
 
+* [2026-11-06 turbo Phase 3 results](findings/2026-11-06-turbo-phase3-results.md) - 25 conditions on 50 recording-held-out clips; modest strength-20 steering, flat controls and clean completion
+* [2026-11-06 Phase 3 throughput](findings/2026-11-06-phase3-throughput.md) - same-condition CUDA batching, fresh encoding under every edit, discovery-only parity benchmark and post-job memory cleanup
+* [2026-11-06 budget-sweep throughput](findings/2026-11-06-budget-sweep-throughput.md) - device-native replacement validated at 222M-weight endpoint (22.94 GB peak); unchanged-grid sweep restarted with per-budget checkpoints
 * [2026-11-06 Phase 2 GPU capture](findings/2026-11-06-phase2-gpu-capture.md) - real 12–13x selection speedup, numerical parity and 31 preserved captures reused
 * [2026-11-06 Phase 2 throughput](findings/2026-11-06-phase2-throughput.md) - CUDA backprop followed by huge CPU gradient export/top-k; cached GPU replicas are not active workers
 * [2026-11-06 Phase 1 throughput](findings/2026-11-06-phase1-throughput.md) - low utilization from single-sample threaded decoding; batching feasibility and a smaller Phase 1 budget recommendation

@@ -26,6 +26,9 @@ src/bwhisper/
   phase2n.py       component attribution (neurons, heads, residual), BH-FDR + voting, translation to weight edits
   budget.py        budget sweep (energy, self effect, held-out transfer vs k)
   phase3.py        control experiments (applies any candidates_<type>.npz)
+  phase3_device.py same-condition batched control experiments and discovery-only reference-parity benchmark
+  phase3_inference.py CPU mel bank, tokens-only batched cached decoder, batched sequence-contrast probes
+  interactive.py   Test-tab audio validation, Phase 3 edit provenance, cached-model comparisons and queued release
   paramspace.py    stable flat addressing of a parameter subset, sparse edit/undo
   aggregate.py     counts -> common set -> voting -> permutation null -> FDR (pure numpy, unit-tested)
   api.py           FastAPI: settings, corpus, jobs, phase views, knowledge
@@ -41,6 +44,18 @@ data/              gitignored: corpus.db, audio, runs, secrets, settings.json
 `@register(name, kind, defaults)` adds a job type. `kind='gpu'` jobs run one at a time, `'io'` jobs on a separate pool.
 Each run writes `job.json` (state), `log.txt`, and phase outputs; the UI polls `/api/jobs` and reads the same files, so a run started
 from the CLI shows up in the UI and vice versa. Job state survives restarts (active jobs are marked `interrupted`).
+
+The [Test tab](/reference/interactive-test.md) submits `test_transcribe` to the same
+GPU queue, never edits a model inside an HTTP handler, and keeps the restored model
+cached between comparisons. `model_release` explicitly tears it down in that queue.
+Uploaded/recorded audio lives outside the corpus in ignored `data/test_audio/`.
+
+Budget sweeps/benchmarks and Phase 3/its benchmark default to
+`release_model_after_run=true`: the GPU worker clears model caches, collects
+garbage and empties CUDA allocator buffers after the job's call/exception frames
+have unwound, then saves `model_cleanup.json` and terminal job state. This also
+runs after cooperative cancellation or failure. Unloading inside a job's own
+finally would leave local tensors alive and is insufficient.
 
 Phase 1 can use explicit `devices` for one replica/shard per GPU inside its single
 registered job; all other GPU phases still use one device. See [server setup](/reference/server-setup.md).

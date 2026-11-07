@@ -42,12 +42,58 @@ points, all_no_embed). A [throughput review](/findings/2026-11-06-phase2-through
 identified dense CPU gradient export/selection and idle cached replicas. The owner
 then approved optimization: the source job was stopped with 31 complete captures
 preserved; a real-model benchmark passed numerical parity with 12–13x faster
-selection. The same 100-point experiment resumed as `phase2-20261106-203005-7d37`,
-reusing all 31 captures and releasing unused GPU models. See
+selection. The same 100-point experiment completed as `phase2-20261106-203005-7d37`,
+reusing all 31 captures and releasing unused GPU models. Its 69 new captures
+averaged 2.91 s; both directions saved 50,000 capped candidates. CPU aggregation
+then dominated (~35 of 38.8 resumed wall minutes), making voting/null/statistics
+the next performance target rather than backprop. No Phase 3 was started. See
 [GPU capture benchmark](/findings/2026-11-06-phase2-gpu-capture.md).
-Phase 2/2N and Phase 3
-are still single-device. No new budget, Phase 2N or Phase 3 job has been authorized
-or submitted by this session.
+Phase 2/2N and Phase 3 are still single-device. No new Phase 2N or Phase 3 job
+has been authorized or submitted by this session.
+
+The owner subsequently started `budget_sweep-20261106-211412-59e7` and requested
+another performance check. It still uses the legacy CPU gradient/full-sort path,
+ten repeated selections and expensive large-support application; the default
+largest budget is ~222M weights. See [budget review](/findings/2026-11-06-budget-sweep-throughput.md).
+The owner then approved pausing/optimizing/restarting it. Device-native nested
+ranking and sorted sparse edits passed parity/resume tests and the real endpoint
+benchmark `budget_benchmark-20261106-213235-c809`: exact full-weight restoration,
+22.94 GB peak allocation, 0.248 s largest edit/eval/undo. The preserved NumPy
+shuffle still costs 10.33 s at the largest budget. The unchanged ten-budget,
+24-train/12-test sweep restarted as `budget_sweep-20261106-213326-bff5`, now with
+per-budget metrics, timing and resume checkpoints. The old files remain intact;
+the legacy sweep had no partial metrics to resume. Still single-GPU/unbatched;
+no automatic Phase 3 follows.
+The restarted sweep completed in 7.80 minutes with 384 checkpoint records and no
+runtime error. Mean held-out cardinal log-odds shift was already about -2 at small
+supports, versus -1.85 at the 222M endpoint; shuffled controls were near zero.
+Small-support variance is higher; these objective changes still require separate
+generated-output validation. NumPy control shuffling/transfers consumed ~41% wall.
+
+Before the owner starts Phase 3, its CUDA path was optimized with same-condition
+batching (default 8), tokens-only decoding, reusable CPU mel features, and fresh
+encoder outputs under every condition's actual weights. The strength-2 real-model
+benchmark passed token/metric/probe/restoration parity, with 4.48x decoder and
+1.29x measured overall-inference speedup; encoder computation dominates. Budget
+and Phase 3 jobs/benchmarks now unload models and allocator buffers after their
+frames unwind. A repeat largest-budget diagnostic confirmed cleanup from 22.94 GB
+peak to ~18 MB live tensors (~38 MB reserved), excluding CUDA context overhead.
+See [Phase 3 validation](/findings/2026-11-06-phase3-throughput.md). Full Phase 3
+evaluation has not been started; frozen evaluation audio remains unused.
+The remaining default strengths 5/10/20 also passed discovery-only token/metric/
+probe/restoration parity at batch 8 (146 checks total across the two benchmarks).
+The validated UI/API code is loaded, no jobs remain active, and cleanup leaves
+only ~375 MiB CUDA context/library residency rather than the old ~30 GB cache.
+
+The owner then explicitly authorized Phase 3. Run `phase3-20261106-220319-1429`
+completed all 25 conditions on 50 frozen recording-held-out clips in 7.35 minutes,
+with 1,250 outputs and successful model cleanup. Effects were modest: baseline
+digit-mention share 62.67%, strongest cardinal edit 58.67%, strongest digit edit
+64.00%; controls and lower-strength metrics flat. No detected degeneration. See
+[results and limitations](/findings/2026-11-06-turbo-phase3-results.md).
+The owner also requested a [Test tab](/reference/interactive-test.md) for ≤30 s
+microphone/upload audio, independent configurable edits plus baseline, using one
+cached CUDA model with exact rollback and fresh encoding under each edit.
 
 # Laptop status (2026-11-06, afternoon)
 

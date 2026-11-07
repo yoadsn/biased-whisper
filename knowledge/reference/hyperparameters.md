@@ -66,6 +66,25 @@ Measures, for budgets k = fraction x total knobs, the energy captured, the real 
 edit restricted to k params (with a shuffled control). Keys: `fractions`, `train_points`, `test_points`, `direction`, `xfer_target`
 (predicted mean log-odds change the transfer edit is scaled to), plus `param_filter`, `objective`, `normalize`.
 
+| key | default | meaning |
+|---|---|---|
+| `budget_backend` | auto | CUDA uses device-native gradients, nested rankings and sorted sparse edits; `reference` retains the legacy CPU implementation |
+| `resume_run` | null | stopped compatible device sweep with `plan.json` and per-budget measurements; legacy sweeps cannot resume |
+| `release_unused_models` | true | release idle cached replicas before the sweep |
+| `release_model_after_run` | true | unload models and device allocator buffers after job frames unwind, including cancellation/failure; also applies to `budget_benchmark` |
+
+The device backend checkpoints each completed budget/calibration point, the train
+consensus, and NumPy control RNG state. Resume validates the scientific config,
+model signature and point order. Interrupted training before consensus was saved
+replays gradients but reuses completed metrics. The shuffled control retains NumPy
+permutation ordering, so its selected values still visit CPU.
+
+On the 740M-weight turbo space, the unchanged default 0.3 endpoint means ~222M edited
+weights. Run `budget_benchmark` with the same config (or the UI's smallest/largest
+benchmark button) to check endpoint timing, peak CUDA allocation and exact full-weight
+restoration. Memory guards fail rather than silently truncating the grid. This is
+still a single-device, unbatched sweep. See [throughput findings](/findings/2026-11-06-budget-sweep-throughput.md).
+
 # Phase 2N (`phase2n`)
 
 | key | default | meaning |
@@ -82,6 +101,34 @@ Phase 3 uses its outputs with `phase2_run=<phase2n run>` and `nudge_types` from 
 (`neurons_to_cardinal`, `heads_to_digits`, `steer_to_cardinal`, ...).
 
 # Phase 3
+
+CUDA defaults to same-condition batched inference. No encoded states or KV caches
+survive an edit/condition boundary: encoder outputs are recomputed under the current
+weights. Only weight-independent CPU mel features are reused. Precision, suppression,
+candidate ordering, control RNG, strengths and token limits are unchanged.
+`phase3_benchmark` compares serial reference tokens, metrics and probe values against
+batches (default 1/4/8) on Phase 2 discovery audio only, including nudges/controls
+and exact full-weight restoration.
+
+| key | default | meaning |
+|---|---|---|
+| `inference_backend` | auto | CUDA uses tokens-only batching; `reference` retains serial diagnostic decoding; `batched` explicitly selects the new path |
+| `batch_size` | 8 | utterances per encoder/decoder/probe batch; lower explicitly if device memory is constrained; no automatic precision/grid reduction |
+| `release_model_after_run` | true | unload cached models and unused GPU memory on success/cancellation/failure, recording `model_cleanup.json` |
+
+Stage timings are in `preparation_timings.json` and `condition_timings.jsonl`;
+`inference.json` records backend, peak allocation and cache policy. Progress counts
+probe work as well as transcription. There is still no Phase 3 resume facility.
+Use explicit recording-held-out `eval_sample_ids` when required; excluding only
+Phase 2 sample IDs is not a recording-disjoint holdout guarantee.
+
+Interactive `test_transcribe` deliberately differs from scientific jobs:
+`release_model_after_run=false` retains the restored baseline for later audio
+comparisons. Its model/statistic/candidate limit/token cap are pinned by the
+selected completed Phase 3 run; each `edit_configs` row specifies an edit name,
+finite strength and optional label. Baseline is always included, including an
+empty config list. CUDA is used when available. See the
+[Test reference](/reference/interactive-test.md).
 
 | key | default | meaning |
 |---|---|---|

@@ -134,16 +134,64 @@ class ParamSpace:
 
     def add_sparse(self, idx: np.ndarray, delta: np.ndarray):
         """Add delta at flat indices (sorted ascending). Returns an undo token."""
+        idx = np.asarray(idx, dtype=np.int64)
+        delta = np.asarray(delta, dtype=np.float32)
+        if idx.ndim != 1 or delta.shape != idx.shape:
+            raise ValueError("sparse indices/values must be matching vectors")
+        bounds = self.sparse_bounds(idx)
         undo = []
-        tid = self.tensor_ids(idx)
-        with torch.no_grad():
-            for t in np.unique(tid):
-                m = tid == t
-                local = torch.from_numpy((idx[m] - self.starts[t]).astype(np.int64)).to(self.params[t].device)
-                flat = self.params[t].view(-1)
-                old = flat[local].clone()
-                flat[local] = old + torch.from_numpy(delta[m].astype(np.float32)).to(flat.device, flat.dtype)
-                undo.append((int(t), local, old))
+        try:
+            with torch.no_grad():
+                for t, (lo, hi) in enumerate(zip(bounds, bounds[1:])):
+                    if lo == hi:
+                        continue
+                    p = self.params[t]
+                    local = torch.from_numpy(idx[lo:hi] - self.starts[t]).to(p.device)
+                    flat = p.view(-1)
+                    old = flat[local].clone()
+                    undo.append((t, local, old))
+                    flat.index_copy_(0, local, old + torch.from_numpy(delta[lo:hi]).to(p.device, p.dtype))
+        except Exception:
+            self.undo_sparse(undo)
+            raise
+        return undo
+
+    def sparse_bounds(self, idx, validate: bool = True) -> list[int]:
+        """Split sorted unique indices with O(tensors log k) boundary lookups."""
+        keys = np.concatenate([self.starts, [self.total]])
+        if isinstance(idx, torch.Tensor):
+            if idx.ndim != 1 or idx.dtype != torch.int64:
+                raise ValueError("device sparse indices must be a 1-D int64 tensor")
+            if validate and idx.numel() and (int(idx[0]) < 0 or int(idx[-1]) >= self.total
+                                              or not bool(torch.all(idx[1:] > idx[:-1]))):
+                raise ValueError("sparse indices must be sorted, unique and in range")
+            return torch.searchsorted(idx, torch.as_tensor(keys, device=idx.device)).cpu().tolist()
+        if validate and len(idx) and (idx[0] < 0 or idx[-1] >= self.total or np.any(idx[1:] <= idx[:-1])):
+            raise ValueError("sparse indices must be sorted, unique and in range")
+        return np.searchsorted(idx, keys).tolist()
+
+    def add_sparse_device(self, idx: torch.Tensor, delta: torch.Tensor, bounds=None):
+        """Apply a sorted support without exporting indices/values to the host."""
+        if idx.ndim != 1 or delta.shape != idx.shape:
+            raise ValueError("sparse indices/values must be matching vectors")
+        bounds = self.sparse_bounds(idx) if bounds is None else bounds
+        if len(bounds) != len(self.params) + 1 or bounds[0] != 0 or bounds[-1] != len(idx):
+            raise ValueError("invalid sparse tensor boundaries")
+        undo = []
+        try:
+            with torch.no_grad():
+                for t, (lo, hi) in enumerate(zip(bounds, bounds[1:])):
+                    if lo == hi:
+                        continue
+                    p = self.params[t]
+                    local = (idx[lo:hi] - int(self.starts[t])).to(p.device)
+                    flat = p.view(-1)
+                    old = flat[local].clone()
+                    undo.append((t, local, old))
+                    flat.index_copy_(0, local, old + delta[lo:hi].to(p.device, p.dtype))
+        except Exception:
+            self.undo_sparse(undo)
+            raise
         return undo
 
     def undo_sparse(self, undo) -> None:

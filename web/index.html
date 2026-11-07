@@ -14,7 +14,7 @@
   <h1>🎙 biased-whisper</h1>
   <nav>
     <template x-for="t in tabs" :key="t">
-      <button :class="{on: tab===t}" @click="tab=t" x-text="t"></button>
+      <button :class="{on: tab===t}" @click="tab=t" x-text="t==='test' ? 'Test' : t"></button>
     </template>
   </nav>
   <span class="spacer"></span>
@@ -618,6 +618,7 @@
     <div class="cfg" data-cfg="budget_sweep"></div>
     <div class="row" style="margin-top:8px">
       <button class="btn" :disabled="!bud.chosen.length" @click="launchBud().then(j=>selectBud(j.id))">Run budget sweep</button>
+      <button class="btn sec" :disabled="!bud.chosen.length" @click="launch('budget_benchmark', {...parseCfg('budget_sweep'), phase1_runs:bud.chosen})">Benchmark smallest/largest budgets</button>
     </div>
   </div>
 
@@ -714,7 +715,10 @@
     <div class="row"><b>phase 2 run</b>
       <select x-model="p2.run"><option value="">latest done</option><template x-for="j in byType('phase2').filter(x=>x.status==='done')" :key="j.id"><option :value="j.id" x-text="j.id"></option></template></select></div>
     <div class="cfg" data-cfg="phase3" style="margin-top:8px"></div>
-    <div class="row" style="margin-top:8px"><button class="btn" @click="launchP3().then(j=>selectP3(j.id))">Run phase 3</button></div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn" @click="launchP3().then(j=>selectP3(j.id))">Run phase 3</button>
+      <button class="btn sec" @click="launch('phase3_benchmark', {...parseCfg('phase3'), phase2_run:p2.run || byType('phase2').find(j=>j.status==='done')?.id, strengths:[2], benchmark_samples:8, benchmark_batch_sizes:[1,4,8]})">Benchmark GPU (discovery only)</button>
+    </div>
   </div>
   <div class="card">
     <div class="row"><b>Run</b>
@@ -742,6 +746,87 @@
         <table><template x-for="[c,t] in Object.entries(p3.outputs[p3.sample]||{})" :key="c"><tr><td class="mono" style="width:240px" x-text="c"></td><td class="rtl" x-html="hlDigits(t)"></td></tr></template></table>
       </div>
     </template>
+  </div>
+</section>
+
+<!-- ======================= TEST ======================= -->
+<section x-show="tab==='test'">
+  <h2>Test <span class="small muted">One audio sample. Base model + your edits.</span></h2>
+  <div class="card">
+    <label class="f">Completed Phase 3 run
+      <select aria-label="Test Phase 3 run" x-model="test.source" @change="loadTestSource()" :disabled="testBusy()">
+        <option value="">Choose a run…</option>
+        <template x-for="j in byType('phase3').filter(j=>j.status==='done')" :key="j.id"><option :value="j.id" x-text="j.id"></option></template>
+      </select>
+    </label>
+    <p class="muted small" x-show="!byType('phase3').some(j=>j.status==='done')">A completed Phase 3 run is needed. Running experiments are listed in Jobs.</p>
+    <p class="muted small" x-show="test.loading">Loading edit definitions…</p>
+    <template x-if="test.spec"><div class="test-model small">
+      <span class="mono" x-text="test.spec.model"></span>
+      <span class="pill" x-text="test.spec.stat"></span>
+      <span class="muted" x-text="test.spec.edits.map(e=>e.id+': '+e.params.toLocaleString()+' weights').join(' · ')"></span>
+    </div></template>
+    <p class="muted small">CUDA when available. One model is loaded on the first test and kept cached for the next; no model copies per config. Scientific jobs may clear idle caches.</p>
+  </div>
+
+  <div class="grid test-columns">
+    <div class="card">
+      <h3>1 · Audio</h3>
+      <p class="muted small">Up to 30 seconds · 25 MB. Audio stays local and is not added to the experiment corpus.</p>
+      <div class="row">
+        <button class="btn" x-show="!test.recording" @click="startTestMic()" :disabled="testBusy()" x-text="test.starting ? 'Waiting for microphone…' : 'Record microphone'"></button>
+        <button class="btn bad" x-show="test.recording" @click="stopTestMic()">Stop recording</button>
+        <span x-show="test.recording" class="pill running" x-text="test.seconds.toFixed(1)+' / 30 s'"></span>
+      </div>
+      <label class="f" style="margin-top:14px">Or upload audio
+        <input aria-label="Test audio file" type="file" accept="audio/*,.wav,.mp3,.flac,.ogg,.webm,.m4a,.mp4" :disabled="testBusy()" @change="uploadTestAudio($event.target.files[0]); $event.target.value=''">
+      </label>
+      <p class="small muted" x-show="test.uploading">Checking audio and preparing playback…</p>
+      <template x-if="test.audio"><div style="margin-top:14px">
+        <div class="row small"><b x-text="test.audio.filename"></b><span class="muted" x-text="test.audio.duration.toFixed(2)+' s'"></span></div>
+        <audio controls :src="test.audio.url" style="margin-top:8px;width:100%"></audio>
+      </div></template>
+      <p class="small muted">Microphone access requires HTTPS or localhost and browser permission. Recording stops automatically at 30 seconds.</p>
+    </div>
+
+    <div class="card">
+      <h3>2 · Edit configs</h3>
+      <div class="test-base"><b>Base model (untouched)</b><span class="small muted">Always included</span></div>
+      <template x-for="(c,i) in test.configs" :key="c.id"><div class="test-edit">
+        <label class="f">Edit
+          <select :aria-label="'Edit '+(i+1)" x-model="c.edit" :disabled="testBusy()"><template x-for="e in (test.spec?.edits||[])" :key="e.id"><option :value="e.id" :selected="e.id===c.edit" x-text="e.id"></option></template></select>
+        </label>
+        <label class="f">Strength ×
+          <input :aria-label="'Strength '+(i+1)" type="number" step="any" x-model.number="c.strength" :disabled="testBusy()">
+        </label>
+        <label class="f test-config-label">Label (optional)<input :aria-label="'Config label '+(i+1)" type="text" x-model="c.label" :disabled="testBusy()" placeholder="e.g. cardinal, gentle"></label>
+        <button class="btn sec" :aria-label="'Remove config '+(i+1)" @click="test.configs=test.configs.filter(x=>x.id!==c.id)" :disabled="testBusy()">Remove</button>
+      </div></template>
+      <button class="btn sec" @click="addTestConfig()" :disabled="!test.spec || testBusy()" style="margin-top:10px">+ Add config</button>
+      <p class="small muted">Each row is an independent edit, not cumulative. Amount = strength × the selected run’s candidate statistic. Zero leaves weights unchanged; negative strengths reverse an edit. Large amounts can degrade transcription.</p>
+      <p class="small muted">Only audio features are reused. Encoder outputs are recomputed after each edit, then the exact original weights are restored before the next config.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button class="btn" @click="runTest()" :disabled="!test.audio || !test.spec || test.loading || testBusy()" x-text="'Transcribe base + '+test.configs.length+' edit config'+(test.configs.length===1?'':'s')"></button>
+      <button class="btn sec" @click="unloadTestModel()" :disabled="testBusy()">Unload model</button>
+      <template x-if="job(test.run)"><span class="row small"><span class="pill" :class="job(test.run).status" x-text="job(test.run).status"></span>
+        <span class="muted" x-text="job(test.run).message"></span>
+        <button class="btn sec" x-show="['queued','running'].includes(job(test.run).status)" @click="cancel(test.run)">Cancel</button>
+      </span></template>
+    </div>
+    <p class="note" role="alert" x-show="test.error" x-text="test.error"></p>
+    <div class="test-results" x-show="test.results.length">
+      <template x-for="r in test.results" :key="r.index"><article class="test-result" :class="{'test-result-base':r.edit===null}">
+        <div class="row"><b x-text="r.label"></b><span class="pill" x-show="r.edit!==null" x-text="'× '+r.strength"></span>
+          <span class="small muted" x-text="f(r.timings.encoder_s+r.timings.decoder_s,2)+' s inference'"></span>
+        </div>
+        <p class="rtl" x-text="r.text || '(no text)'" style="white-space:pre-wrap"></p>
+        <p class="small note" x-show="r.truncated">Token limit reached. This transcript may be incomplete.</p>
+      </article></template>
+    </div>
   </div>
 </section>
 

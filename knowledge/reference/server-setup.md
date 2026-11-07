@@ -22,6 +22,13 @@ errors; 3,888 recording-held-out evaluation samples remain untouched. See
 [completed turbo results](/findings/2026-11-06-turbo-phase1-validation.md).
 This does not authorize Phase 1.5, budget or later phases.
 
+Later authorization update: the owner subsequently ran Phase 1.5, authorized the
+Phase 2/budget optimizations and explicitly requested Phase 3. The first prepared
+50-clip held-out Phase 3 evaluation is now complete; see
+[turbo results](/findings/2026-11-06-turbo-phase3-results.md). This historical setup
+gate does not prevent the specifically authorized work; additional scientific
+experiments still require their own scope/approval.
+
 # Environment
 
 ```bash
@@ -125,8 +132,9 @@ Phase 2/2N, budget and Phase 3 are **still single-device**. No claim of distribu
 attribution/aggregation support. Do not scale Phase 2's `max_points` straight to
 10,000: sparse captures are ~16 MB/point for both directions at `sample_k=1e6`,
 before overhead; the existing 8 GB guard should remain active until budgeted.
-Phase 3 caches encoder states on device, so its full held-out template is a
-**cohort definition, not a promise the whole cohort fits in GPU memory**. Start
-with a bounded `eval_limit`, or implement bounded caching before full evaluation.
+Phase 3 now uses bounded same-condition batches (default 8), with CPU mel-feature
+reuse but **no encoder outputs cached across edits**. Its full held-out template
+remains a cohort definition, not authorization to consume every held-out sample;
+the first owner-authorized run used the prepared `eval_limit=50`.
 Large-model edit strengths and budgets require calibration; laptop findings are
 not assumed to transfer unchanged.

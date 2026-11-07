@@ -1,5 +1,7 @@
 const OPTIONS = {
   capture_backend: ['auto', 'device', 'reference'],
+  inference_backend: ['auto', 'batched', 'reference'],
+  budget_backend: ['auto', 'device', 'reference'],
   objective: ['auto', 'seq_contrast', 'mass', 'pair', 'mass_vs_card'],
   nudge_mode: ['linear', 'iterative'],
   param_filter: ['all_no_embed', 'all', 'decoder_no_embed', 'decoder', 'encoder', 'bitfit'],
@@ -10,6 +12,10 @@ const OPTIONS = {
 };
 const HELP = {
   capture_backend: 'auto uses GPU-native sparse selection for linear CUDA capture; reference keeps the original CPU path',
+  inference_backend: 'auto uses batched tokens-only Phase 3 decoding on CUDA; reference retains the serial decoder',
+  batch_size: 'Phase 3 utterances per batch; encoder outputs are recomputed under each edit; precision is unchanged',
+  release_model_after_run: 'Unload cached models and unused GPU memory after completion, cancellation or failure',
+  budget_backend: 'auto uses device-native sweep rankings and edits on CUDA; reference is the legacy CPU sweep',
   resume_run: 'stopped Phase 2 run whose complete compatible captures should be reused (original files are preserved)',
   limit: 'how many corpus samples to process',
   mistake_prob: 'target prob = 1 - this (the nudge goal)',
@@ -42,9 +48,27 @@ const HELP = {
 
 const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
+// Write exact-length PCM, so a microphone recording stops at 30 seconds of
+// samples rather than depending on a delayed MediaRecorder/container timer.
+function testWav(chunks, frames, rate) {
+  const buffer = new ArrayBuffer(44 + frames * 2), view = new DataView(buffer);
+  const text = (offset, value) => [...value].forEach((c, i) => view.setUint8(offset + i, c.charCodeAt(0)));
+  text(0, 'RIFF'); view.setUint32(4, 36 + frames * 2, true); text(8, 'WAVE'); text(12, 'fmt ');
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true); view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true); text(36, 'data'); view.setUint32(40, frames * 2, true);
+  let offset = 44;
+  for (const chunk of chunks) for (const sample of chunk) {
+    const value = Math.max(-1, Math.min(1, sample));
+    view.setInt16(offset, Math.round(value * (value < 0 ? 32768 : 32767)), true); offset += 2;
+  }
+  return new Blob([buffer], {type: 'audio/wav'});
+}
+
 function app() {
+  let mic = null; // native audio nodes must not be wrapped in Alpine proxies
   return {
-    tabs: ['overview', 'corpus', 'phase1', 'phase1.5', 'phase2', 'budget', 'phase3', 'jobs', 'knowledge'],
+    tabs: ['overview', 'corpus', 'phase1', 'phase1.5', 'phase2', 'budget', 'phase3', 'test', 'jobs', 'knowledge'],
     tab: location.hash.slice(1) || 'overview',
     settings: {}, device: '', jobs: [], jobTypes: {}, cfgs: {}, OPTIONS, HELP,
     toast: '',
@@ -56,6 +80,9 @@ function app() {
     p2: { run: '', chosen: [], summary: null, type: 'to_cardinal', cands: [], candTotal: 0, candOffset: 0, p1runs: [], verdicts: ['cardinal', 'human_good'], usable: null },
     bud: { run: '', chosen: [], p1runs: [], summary: null },
     p3: { run: '', table: [], outputs: {}, sample: null },
+    test: { source: '', spec: null, loading: false, audio: null, configs: [], nextId: 1,
+            run: '', results: [], error: '', uploading: false, submitting: false,
+            recording: false, seconds: 0, starting: false },
     logJob: '', logText: '', logOff: 0,
     kn: { list: [], doc: null },
 
@@ -91,6 +118,8 @@ function app() {
         const was = prev.find(x => x.id === sel);
         if (j && (['running'].includes(j.status) || (was && was.status !== j.status))) fn();
       }
+      const tj = this.job(this.test.run), tw = prev.find(j => j.id === this.test.run);
+      if (tj && (['queued', 'running'].includes(tj.status) || !tw || tw.status !== tj.status)) await this.loadTestResults();
       if (this.logJob) this.pollLog();
       return active;
     },
@@ -134,12 +163,17 @@ function app() {
 
     // ---------------- navigation
     onTab(t) {
+      if (t !== 'test' && mic) this.stopTestMic();
       if (t === 'corpus') this.loadCorpus(true);
       if (t === 'phase1') { this.loadUsable(); if (!this.p1.run) this.pickLatest('phase1'); }
       if (t === 'phase1.5') { if (!this.p15.run) this.pickLatest('phase1_5'); }
       if (t === 'phase2') { this.initP2(); if (!this.p2.run) this.pickLatest('phase2'); }
       if (t === 'budget') { this.initBud(); if (!this.bud.run) this.pickLatest('budget_sweep'); }
       if (t === 'phase3') { if (!this.p3.run) this.pickLatest('phase3'); }
+      if (t === 'test' && !this.test.source) {
+        this.test.source = (this.job(this.p3.run)?.status === 'done' ? this.p3.run : '') || this.byType('phase3').find(j => j.status === 'done')?.id || '';
+        if (this.test.source) this.loadTestSource();
+      }
       if (t === 'knowledge') this.loadKnowledge();
     },
     pickLatest(type) {
@@ -376,6 +410,103 @@ function app() {
     },
     p3base() { return this.p3.table.find(r => r.cond === 'baseline'); },
     async launchP3() { return this.launch('phase3', { phase2_run: this.p2.run || this.byType('phase2').find(j => j.status === 'done')?.id }); },
+
+    // ---------------- interactive Test playground
+    testBusy() {
+      return this.test.starting || this.test.recording || this.test.uploading || this.test.submitting ||
+        ['queued', 'running'].includes(this.job(this.test.run)?.status);
+    },
+    async loadTestSource() {
+      const id = this.test.source;
+      this.test.spec = null; this.test.loading = true; this.test.error = '';
+      this.test.run = ''; this.test.results = [];
+      try {
+        if (!id) return;
+        const spec = await this.api('/api/test/runs/' + encodeURIComponent(id), 'GET', undefined, true);
+        if (this.test.source !== id) return;
+        this.test.spec = spec; this.test.configs = [];
+        for (const edit of spec.edits) this.addTestConfig(edit.id);
+      } catch (e) { this.test.error = e.message; }
+      finally { this.test.loading = false; }
+    },
+    addTestConfig(edit) {
+      if (!this.test.spec) return;
+      this.test.configs.push({id: this.test.nextId++, edit: edit || this.test.spec.edits[0].id,
+        strength: this.test.spec.strengths[0] ?? 1, label: ''});
+    },
+    async uploadTestAudio(blob, filename) {
+      if (!blob) return;
+      this.test.error = ''; this.test.uploading = true;
+      try {
+        if (blob.size > 25 * 1024 * 1024) throw new Error('Audio upload is limited to 25 MB.');
+        const response = await fetch('/api/test/audio?filename=' + encodeURIComponent(filename || blob.name || 'recording.wav'),
+          {method: 'POST', headers: {'Content-Type': blob.type || 'application/octet-stream'}, body: blob});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Audio upload failed.');
+        this.test.audio = data; this.test.run = ''; this.test.results = [];
+      } catch (e) { this.test.error = e.message; }
+      finally { this.test.uploading = false; }
+    },
+    async startTestMic() {
+      this.test.error = ''; this.test.starting = true;
+      let stream, context;
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error('Microphone recording needs HTTPS or localhost and microphone permission. You can upload a file instead.');
+        stream = await navigator.mediaDevices.getUserMedia({audio: {channelCount: 1}});
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        context = new AudioContextClass(); await context.resume();
+        const source = context.createMediaStreamSource(stream), processor = context.createScriptProcessor(4096, 1, 1);
+        const gain = context.createGain(); gain.gain.value = 0;
+        const session = {stream, context, source, processor, gain, frames: 0, rate: context.sampleRate, chunks: []};
+        mic = session; this.test.seconds = 0; this.test.recording = true;
+        processor.onaudioprocess = event => {
+          if (mic !== session) return;
+          const data = event.inputBuffer.getChannelData(0), remaining = 30 * session.rate - session.frames;
+          const part = data.slice(0, Math.min(data.length, remaining));
+          session.chunks.push(part); session.frames += part.length;
+          this.test.seconds = session.frames / session.rate;
+          if (session.frames >= 30 * session.rate) this.stopTestMic();
+        };
+        source.connect(processor); processor.connect(gain); gain.connect(context.destination);
+        if (this.tab !== 'test') this.stopTestMic();
+      } catch (e) {
+        stream?.getTracks().forEach(track => track.stop());
+        if (context && context.state !== 'closed') await context.close().catch(() => {});
+        mic = null; this.test.recording = false; this.test.error = e.message;
+      } finally { this.test.starting = false; }
+    },
+    async stopTestMic() {
+      const session = mic;
+      if (!session) return;
+      mic = null; this.test.recording = false; this.test.uploading = true;
+      session.processor.onaudioprocess = null;
+      session.source.disconnect(); session.processor.disconnect(); session.gain.disconnect();
+      session.stream.getTracks().forEach(track => track.stop());
+      await session.context.close().catch(() => {});
+      if (!session.frames) { this.test.error = 'No microphone audio was captured.'; this.test.uploading = false; return; }
+      await this.uploadTestAudio(testWav(session.chunks, session.frames, session.rate), 'microphone.wav');
+    },
+    async runTest() {
+      this.test.error = ''; this.test.submitting = true;
+      try {
+        if (!this.test.source || !this.test.audio) throw new Error('Choose a Phase 3 run and record or upload audio first.');
+        if (this.test.configs.some(c => !Number.isFinite(c.strength))) throw new Error('Every strength must be a finite number.');
+        const job = await this.api('/api/test/transcribe', 'POST', {phase3_run: this.test.source,
+          audio_id: this.test.audio.id, edit_configs: this.test.configs.map(({edit, strength, label}) => ({edit, strength, label}))}, true);
+        this.test.run = job.id; this.test.results = []; await this.pollJobs();
+      } catch (e) { this.test.error = e.message; }
+      finally { this.test.submitting = false; }
+    },
+    async loadTestResults() {
+      if (!this.test.run) return;
+      const job = this.job(this.test.run);
+      const data = await this.api('/api/jobs/' + this.test.run + '/rows?file=results.jsonl&limit=1000000', 'GET', undefined, true);
+      this.test.results = data.items;
+      if (job?.error) this.test.error = job.error;
+    },
+    async unloadTestModel() {
+      await this.launch('model_release'); this.say('Model release queued after any active GPU work.');
+    },
 
     // ---------------- knowledge
     async loadKnowledge() { this.kn.list = await this.api('/api/knowledge'); if (!this.kn.doc && this.kn.list.length) this.openDoc(this.kn.list.find(d => d.path === 'index.md')?.path || this.kn.list[0].path); },

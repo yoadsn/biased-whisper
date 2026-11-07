@@ -8,7 +8,8 @@ from typing import Any
 import numpy as np
 import torch
 import yaml
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Request
+from starlette.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -16,8 +17,11 @@ from . import jobs
 from . import phase1 as _p1  # noqa: F401  (registers job types)
 from . import phase2 as _p2  # noqa: F401
 from . import phase3 as _p3  # noqa: F401
+from . import phase3_device as _p3_device  # noqa: F401
+from . import interactive
 from . import phase1_5 as _p15  # noqa: F401
 from . import budget as _bud  # noqa: F401
+from . import budget_device as _budget_device  # noqa: F401
 from . import phase2n as _p2n  # noqa: F401
 from . import setup_scale as _setup_scale  # noqa: F401
 from .config import KNOWLEDGE_DIR, RUNS_DIR, WEB_DIR, ensure_dirs, load_settings, save_settings
@@ -191,6 +195,67 @@ def jobs_file(jid: str, name: str):
 
 
 # ---------------------------------------------------------------- phase specific
+@app.get("/api/test/runs/{jid}")
+def test_source(jid: str):
+    try:
+        spec = interactive.source_spec(jid)
+        return {k: v for k, v in spec.items() if k != "p2_config"}
+    except (ValueError, KeyError, FileNotFoundError) as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.post("/api/test/audio")
+async def test_upload(request: Request, filename: str = "audio"):
+    import tempfile
+
+    interactive.TEST_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+    # Stream a raw audio body, not JSON/base64 or unbounded multipart buffering.
+    with tempfile.TemporaryDirectory(dir=interactive.TEST_AUDIO_DIR) as scratch:
+        path = Path(scratch) / "input.audio"
+        count = 0
+        with path.open("wb") as file:
+            async for chunk in request.stream():
+                count += len(chunk)
+                if count > interactive.MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, "audio upload is limited to 25 MB")
+                file.write(chunk)
+        if not count:
+            raise HTTPException(400, "audio is empty")
+        try:
+            return await run_in_threadpool(interactive.normalize_upload, path, filename)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+
+
+@app.get("/api/test/audio/{audio_id}")
+def test_audio(audio_id: str):
+    try:
+        return FileResponse(interactive.audio_dir(audio_id) / "audio.wav", media_type="audio/wav")
+    except ValueError as e:
+        raise HTTPException(404, str(e)) from None
+
+
+@app.get("/api/test/audio/{audio_id}/info")
+def test_audio_info(audio_id: str):
+    try:
+        return json.loads((interactive.audio_dir(audio_id) / "audio.json").read_text())
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(404, str(e)) from None
+
+
+@app.post("/api/test/transcribe")
+def test_submit(body: dict = Body(...)):
+    try:
+        spec = interactive.source_spec(body.get("phase3_run"))
+        interactive.audio_dir(body.get("audio_id"))
+        configs = interactive.validated_configs(spec, body.get("edit_configs", []))
+        return manager().submit("test_transcribe", {
+            "phase3_run": spec["phase3_run"], "audio_id": body["audio_id"], "edit_configs": configs,
+        }).to_dict()
+    except (ValueError, KeyError, FileNotFoundError) as e:
+        raise HTTPException(400, str(e)) from None
+
+
 @app.get("/api/phase1/{jid}/verdicts")
 def p1_verdicts(jid: str):
     return load_verdicts(jid)

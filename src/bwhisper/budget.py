@@ -34,6 +34,10 @@ from .phase2 import _eval_grad, point_objective, selection_score
 
 BUDGET_DEFAULTS = {
     "model": None,
+    "budget_backend": "auto",  # CUDA uses device-native nested rankings and sparse edits
+    "resume_run": None,
+    "release_unused_models": True,
+    "release_model_after_run": True,
     "phase1_runs": [],
     "verdicts": ["cardinal", "human_good"],
     "param_filter": "all_no_embed",
@@ -78,6 +82,22 @@ def _ms(x) -> dict:
 
 @register("budget_sweep", kind="gpu", defaults=BUDGET_DEFAULTS)
 def run_budget(ctx: Ctx, cfg: dict) -> dict:
+    from .config import load_settings
+
+    backend = cfg.get("budget_backend", "auto")
+    if backend not in ("auto", "device", "reference"):
+        raise ValueError("budget_backend must be auto, device or reference")
+    device = M.pick_device(load_settings()["device"])
+    if backend == "device" or (backend == "auto" and device.startswith("cuda")):
+        from .budget_device import run_device_budget
+
+        return run_device_budget(ctx, cfg)
+    if cfg.get("resume_run"):
+        raise ValueError("checkpoint resume requires the device budget backend")
+    return run_budget_reference(ctx, cfg)
+
+
+def run_budget_reference(ctx: Ctx, cfg: dict) -> dict:
     L = M.load_model(cfg["model"])
     space = ParamSpace(L.model, cfg["param_filter"], cfg["include_regex"], cfg["exclude_regex"])
     pts = decision_points(cfg["phase1_runs"], cfg["verdicts"])

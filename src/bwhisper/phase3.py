@@ -58,6 +58,19 @@ def _metrics(texts: dict[int, str], base: dict[int, str] | None) -> dict:
 
 @register("phase3", kind="gpu", defaults=PHASE3_DEFAULTS)
 def run_phase3(ctx: Ctx, cfg: dict) -> dict:
+    from .config import load_settings
+
+    backend = cfg.get("inference_backend", "auto")
+    if backend not in ("auto", "batched", "reference"):
+        raise ValueError("inference_backend must be auto, batched or reference")
+    if backend == "batched" or (backend == "auto" and M.pick_device(load_settings()["device"]).startswith("cuda")):
+        from .phase3_device import run_batched
+
+        return run_batched(ctx, cfg)
+    return run_phase3_reference(ctx, cfg)
+
+
+def run_phase3_reference(ctx: Ctx, cfg: dict) -> dict:
     p2dir = RUNS_DIR / cfg["phase2_run"]
     p2cfg = json.loads((p2dir / "job.json").read_text())["config"]
     L = M.load_model(cfg["model"] or p2cfg.get("model"))

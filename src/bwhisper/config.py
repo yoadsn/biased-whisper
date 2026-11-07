@@ -111,6 +111,9 @@ PHASE2_DEFAULTS: dict[str, Any] = {
 
 PHASE3_DEFAULTS: dict[str, Any] = {
     "model": None,
+    "inference_backend": "auto",  # CUDA: batched tokens-only; reference: original diagnostic decoder
+    "batch_size": 8,
+    "release_model_after_run": True,
     "eval_sample_ids": None,  # explicit recording-held-out cohort from setup_scale
     "phase2_run": None,
     "nudge_types": ["to_digits", "to_cardinal"],

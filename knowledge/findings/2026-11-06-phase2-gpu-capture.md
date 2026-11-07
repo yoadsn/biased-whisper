@@ -80,3 +80,36 @@ gradient microbatching, mixed precision and GPU aggregation were not implemented
 CPU common-set voting/null/FDR may become the next bottleneck, especially with
 uncapped common_k. Scientific defaults were deliberately not narrowed for speed.
 No Phase 2N, budget or Phase 3 job was started by this optimization.
+
+# Completed resumed run
+
+`phase2-20261106-203005-7d37` finished successfully: **100 decision points**, 31
+reused and 69 newly captured. Verified 200 unique (point, direction) records with
+no duplicated direction entries. Mean new-point capture: **2.9096 s**, totaling
+3.346 minutes for the 69 new points. Mean stages: audio 0.0651, forward/backward
+0.5537, gradient pack 0.0148, selection/export 2.2127, write 0.0614 seconds.
+
+| Direction | Captured vectors | Union | Common set | Vote threshold | Empirical FDR at threshold | Saved candidates | Split-half top-1% Jaccard |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| to_digits | 76 | 22,251,612 | 6,675,484 | 1,034 | 0.049379 | 50,000 | 0.866827 |
+| to_cardinal | 100 | 26,313,929 | 7,894,179 | 902 | 0.049324 | 50,000 | 0.873837 |
+
+The 24 missing digit-direction vectors are already-satisfied skips, not failed
+points. Both candidate outputs reach the configured max_candidates cap; 50,000
+is a truncation limit, not evidence that exactly that many weights matter.
+Saved candidate counts by tower: digits encoder 40,447 / decoder 9,553; cardinal
+encoder 41,278 / decoder 8,722. These are statistical candidates, not demonstrated
+causal steering effects or proof that the encoder is the decision's unique locus.
+
+The remaining bottleneck is now measured: resumed-job wall time **38.823 min**;
+the last capture was logged at 20:33:53 and job completion at 21:08:54, about
+**35.02 min of CPU aggregation/postprocessing**. Direction common-set-to-final-log
+intervals were about 12.95 min (digits) and 21.85 min (cardinal). Do not report the
+12–13x selector speedup as a whole-job speedup. The next optimization target is
+CPU voting/null/statistics over 6.7–7.9 million common coordinates, not backprop.
+
+Artifacts: `summary.json`, `candidates_to_digits.npz`,
+`candidates_to_cardinal.npz`, `votes_*.npz`, `capture_timings.jsonl`, and
+`resume.json` in the completed run directory. No further jobs or Phase 3 were
+submitted automatically. Subsequent aggregation optimization or control
+experiments require a new owner instruction.

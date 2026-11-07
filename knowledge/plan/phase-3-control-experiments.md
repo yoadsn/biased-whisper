@@ -9,6 +9,20 @@ generated: { by: claude-agent/claude-sonnet-5-5, at: 2026-11-06T09:35:00Z }
 
 # Procedure (job `phase3`, code `phase3.py`)
 
+CUDA execution defaults to a batched tokens-only decoder (`batch_size=8`), with
+the original serial diagnostic decoder available as `inference_backend=reference`.
+CPU mel features are prepared once. Encoder outputs and decoder KV caches are
+always recomputed for each condition under its current weights, including controls;
+none is reused across encoder edits. Sequence-contrast probes are also batched,
+with right-padding excluded from scored divergent spans. See the
+[throughput finding](/findings/2026-11-06-phase3-throughput.md) and
+[hyperparameters](/reference/hyperparameters.md) for validation/benchmark controls.
+
+`phase3_benchmark` compares reference tokens/metrics and probe objectives under
+baseline, edited weights and controls on discovery audio only. It does not run
+the held-out scientific evaluation. Completed/cancelled/failed Phase 3 jobs release
+model caches by default after local tensors have gone out of scope.
+
 1. Load a Phase 2 run's candidates (`candidate_limit` optionally keeps the top-N by votes) and a statistic (`stat`:
    `mean_all`, `mean_present`, `median_present`).
 2. For each nudge type and `strength` apply `delta = strength * stat` to the candidate params (sparse in-place edit, undone after).

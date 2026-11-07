@@ -147,6 +147,20 @@ class Manager:
         except Exception as e:  # noqa: BLE001
             j.status, j.error = "failed", f"{type(e).__name__}: {e}"
             ctx.log("FAILED\n" + traceback.format_exc())
+        # Run after the job frame (including its tensors/exception traceback) has
+        # unwound. Clearing the cache inside a job's finally still leaves its
+        # locals alive, so empty_cache there cannot release the working set.
+        if REGISTRY[j.type]["kind"] == "gpu" and j.config.get("release_model_after_run", False):
+            from . import model as M
+
+            try:
+                cleanup = M.unload_all()
+                ctx.write_json("model_cleanup.json", cleanup)
+                ctx.log("released model cache and unused device memory after job")
+            except Exception as e:  # noqa: BLE001
+                j.status = "failed"
+                j.error = (j.error + "; " if j.error else "") + f"model cleanup failed: {e}"
+                ctx.log("CLEANUP FAILED\n" + traceback.format_exc())
         j.finished = time.time()
         j.save()
 
