@@ -97,7 +97,7 @@ class Ctx:
         self.job.save()
 
     def should_stop(self) -> bool:
-        return self.job.cancel_flag.is_set()
+        return self.job.cancel_requested()
 
     def check(self) -> None:
         if self.should_stop():
@@ -125,6 +125,12 @@ class Job:
         self.finished: float | None = None
         self.lock = threading.RLock()
         self.cancel_flag = threading.Event()
+        self.external = False  # created by another process (e.g. the CLI); state is read from job.json
+        self.mtime = 0.0
+
+    def cancel_requested(self) -> bool:
+        # a marker file lets the UI cancel a run owned by another process
+        return self.cancel_flag.is_set() or (self.dir / "cancel.flag").exists()
 
     def to_dict(self) -> dict:
         return {
@@ -147,6 +153,8 @@ class Manager:
         self.pools = {"gpu": ThreadPoolExecutor(1, thread_name_prefix="gpu"), "io": ThreadPoolExecutor(2, thread_name_prefix="io")}
         self._load_existing()
 
+    _FIELDS = ("status", "progress", "message", "summary", "error", "created", "started", "finished")
+
     def _load_existing(self) -> None:
         for p in RUNS_DIR.glob("*/job.json"):
             try:
@@ -154,12 +162,36 @@ class Manager:
             except Exception:
                 continue
             j = Job(d["id"], d["type"], d["config"], p.parent)
-            for k in ("status", "progress", "message", "summary", "error", "created", "started", "finished"):
+            for k in self._FIELDS:
                 setattr(j, k, d.get(k))
             if j.status in ("running", "queued"):
                 j.status, j.error = "interrupted", "server restarted while job was active"
                 j.save()
+            j.external = True
+            j.mtime = p.stat().st_mtime
             self.jobs[j.id] = j
+
+    def refresh(self) -> None:
+        """Pick up runs written by other processes (CLI) after this server started, and their progress.
+        Jobs started by this process are authoritative and never overwritten."""
+        for p in RUNS_DIR.glob("*/job.json"):
+            j = self.jobs.get(p.parent.name)
+            if j is not None and not j.external:
+                continue
+            try:
+                m = p.stat().st_mtime
+                if j is not None and m == j.mtime:
+                    continue
+                d = json.loads(p.read_text())
+            except (OSError, ValueError):
+                continue  # mid-write or removed; next poll retries
+            if j is None:
+                j = Job(d["id"], d["type"], d["config"], p.parent)
+                j.external = True
+                self.jobs[j.id] = j
+            for k in self._FIELDS:
+                setattr(j, k, d.get(k))
+            j.mtime = m
 
     def new_job(self, type: str, config: dict) -> Job:
         if type not in REGISTRY:
@@ -183,7 +215,7 @@ class Manager:
             if REGISTRY[j.type]["kind"] == "gpu":
                 lease.enter_context(gpu_reservation(j.type, j.config))
             j.summary = REGISTRY[j.type]["fn"](ctx, j.config)
-            j.status = "cancelled" if j.cancel_flag.is_set() else "done"
+            j.status = "cancelled" if j.cancel_requested() else "done"
         except Cancelled:
             j.status = "cancelled"
         except Exception as e:  # noqa: BLE001
@@ -218,15 +250,20 @@ class Manager:
         return j
 
     def get(self, jid: str) -> Job | None:
+        self.refresh()
         return self.jobs.get(jid)
 
     def list(self, type: str | None = None) -> list[dict]:
+        self.refresh()
         js = sorted(self.jobs.values(), key=lambda j: j.created, reverse=True)
         return [j.to_dict() for j in js if type in (None, "", j.type)]
 
     def cancel(self, jid: str) -> bool:
+        self.refresh()
         j = self.jobs.get(jid)
         if j and j.status in ("queued", "running"):
+            if j.external:
+                (j.dir / "cancel.flag").write_text("cancel requested\n")
             j.cancel_flag.set()
             return True
         return False

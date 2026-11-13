@@ -2,6 +2,7 @@
 
 ## 2026-11-13
 
+* UI/CLI parallelism fix: the server only loaded `job.json` files at startup, so CLI-started runs were invisible until a restart. `Manager.refresh()` now picks up and updates externally owned runs on every list/get/cancel, and UI cancel works for them via `cancel.flag`. Tests: `tests/test_job_refresh.py`.
 * Added the `latin1` UI tab (run form, run picker with progress, verdict-by-kind summary, filters, per-clip audio/reference/free-decode/Latin-vs-Hebrew span/top-k and good/bad review reusing the generic verdict endpoints). CLI-started `phase1_latin` runs appear in it via the shared run directory. Later Latin phases (2N/3/4/Test) have no job types yet, so no tabs.
 * Corpus tab/API/importers now support the Latin axis: `content: digits|latin` on explore fetch, HF-cache and PocketTTS imports, `ref_latin` column with migration, Latin filter/column/highlight in the UI; pasted cURL search terms are always templated to `{q}` (a literal term used to be fetched for every job). See `/reference/corpus-sources.md`.
 * Latin-vs-transliteration axis: job `phase1_latin` + `latin_script.py` + tests. With a refreshed explore cookie fetched 300 Hebrew+Latin clips (regex query) and ran turbo Phase 1 on 332 clips on the laptop: 66/73 short English words and 92/127 acronyms convert to Hebrew spellings; phrases do not. Heuristic verdicts, one checkpoint. See `/theory/latin-script-hypothesis.md`, `/findings/2026-11-13-latin-phase1-poc.md`.

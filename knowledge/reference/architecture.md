@@ -58,7 +58,7 @@ data/              gitignored: corpus.db, audio, runs, secrets, settings.json
 
 `@register(name, kind, defaults)` adds a job type. `kind='gpu'` jobs run one at a time, `'io'` jobs on a separate pool.
 Each run writes `job.json` (state), `log.txt`, and phase outputs; the UI polls `/api/jobs` and reads the same files, so a run started
-from the CLI shows up in the UI and vice versa. Job state survives restarts (active jobs are marked `interrupted`).
+from the CLI shows up in the UI and vice versa: the server re-reads other processes' `job.json` files on every poll (mtime-checked), so runs started after it booted appear with live progress, and the UI's cancel button reaches them through a `cancel.flag` marker file in the run directory that the owning process checks. Job state survives restarts (jobs active at startup are marked `interrupted` until their own process saves again). A CLI run that is killed hard keeps its last saved status.
 
 The [Test tab](/reference/interactive-test.md) submits `test_transcribe` to the same
 GPU queue, never edits a model inside an HTTP handler, and keeps the restored model
