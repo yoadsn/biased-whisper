@@ -3,30 +3,121 @@
 <title>Hebrew Whisper · Numbers</title>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
 <style>
-body{font-family:system-ui,sans-serif;max-width:640px;margin:4rem auto;padding:0 1rem;color:#172338;background:#f6f8fc}
+body{font-family:system-ui,sans-serif;max-width:680px;margin:3rem auto;padding:0 1rem;color:#172338;background:#f6f8fc}
 main{background:white;padding:2rem;border-radius:18px;box-shadow:0 8px 40px #17233812}h1{margin-top:0}
-label{display:block;margin:1.4rem 0 .5rem;font-weight:600}input[type=file]{width:100%}
-input[type=range]{width:100%;accent-color:#315bbb}.ends{display:flex;justify-content:space-between;color:#53647c}
-button{background:#315bbb;border:0;border-radius:8px;color:white;padding:.8rem 1.4rem;cursor:pointer;margin-top:1.5rem}
-button:disabled{opacity:.55;cursor:wait}output{display:block;white-space:pre-wrap;line-height:1.8;font-size:1.3rem;background:#f1f4fa;border-radius:8px;padding:1rem;margin-top:1.5rem;min-height:2rem}
-.error{color:#a02b37}.hint{color:#53647c;font-size:.9rem}
-</style></head><body><main x-data="{
-  bias:0, file:null, result:'', error:'', busy:false,
-  async send(){this.error='';this.result='';if(!this.file)return;this.busy=true;
-    try{let form=new FormData();form.append('audio',this.file);form.append('bias',this.bias);
-      let response=await fetch('/transcribe',{method:'POST',body:form});let data=await response.json();
-      if(!response.ok)throw Error(data.detail || 'Transcription failed');this.result=data.text || '(No speech detected)';
-    }catch(e){this.error=e.message}finally{this.busy=false}
+label{display:block;margin:1.4rem 0 .5rem;font-weight:600}.source{display:grid;gap:1rem;grid-template-columns:1fr 1fr}
+.drop{display:block;text-align:center;border:2px dashed #8b9dbf;border-radius:10px;padding:1.3rem;cursor:pointer;margin:.5rem 0}
+.drop.active{border-color:#315bbb;background:#edf2ff}.drop input{position:absolute;width:1px;height:1px;opacity:0}
+.drop:focus-within{outline:2px solid #315bbb;outline-offset:2px}select{width:100%;padding:.7rem;border:1px solid #8b9dbf;border-radius:8px;background:white}
+input[type=range]{width:100%;accent-color:#315bbb}.ends{display:flex;justify-content:space-between;color:#53647c;gap:.4rem;font-size:.85rem}
+button{background:#315bbb;border:0;border-radius:8px;color:white;padding:.8rem 1.2rem;cursor:pointer;margin-top:.5rem}
+button:disabled{opacity:.55;cursor:wait}button.secondary{background:#ebeff9;color:#172338}
+output{display:block;white-space:pre-wrap;line-height:1.8;font-size:1.3rem;background:#f1f4fa;border-radius:8px;padding:1rem;margin-top:1.5rem;min-height:2rem}
+.error{color:#a02b37}.hint{color:#53647c;font-size:.9rem}.selected{font-weight:600;overflow-wrap:anywhere}audio{width:100%;margin-top:.6rem}
+@media(max-width:520px){body{margin:1rem auto}main{padding:1.2rem}.source{grid-template-columns:1fr}}
+</style>
+<script>
+document.addEventListener('alpine:init', () => Alpine.data('demo', () => ({
+  bias: 0, file: null, preset: '', presets: [], previewUrl: '', drag: false,
+  recording: false, recorder: null, stream: null, timer: null, result: '', error: '', busy: false,
+  async init() {
+    try { const r = await fetch('/presets'); if (!r.ok) throw Error('Could not load presets'); this.presets = await r.json(); }
+    catch (e) { this.error = e.message; }
+  },
+  preview(url) {
+    if (this.previewUrl.startsWith('blob:')) URL.revokeObjectURL(this.previewUrl);
+    this.previewUrl = url;
+  },
+  chooseFile(file) {
+    if (!file) return;
+    if (file.size > 25 * 1024 * 1024) { this.error = 'Audio is limited to 25 MB.'; return; }
+    this.error = ''; this.result = ''; this.preset = ''; this.file = file;
+    this.preview(URL.createObjectURL(file));
+  },
+  dropFile(event) {
+    this.drag = false;
+    this.chooseFile(event.dataTransfer.files[0]);
+  },
+  choosePreset() {
+    if (!this.preset) return;
+    this.file = null; this.result = ''; this.error = '';
+    this.$refs.upload.value = '';
+    this.preview('/presets/' + encodeURIComponent(this.preset) + '/audio');
+  },
+  async startRecording() {
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      this.error = 'Microphone recording requires a supported browser and HTTPS.'; return;
+    }
+    this.error = ''; this.result = '';
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({audio: true});
+      const mime = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/ogg;codecs=opus'].find(t => MediaRecorder.isTypeSupported(t));
+      const recorder = new MediaRecorder(stream, mime ? {mimeType: mime} : undefined);
+      const parts = [];
+      recorder.ondataavailable = e => { if (e.data.size) parts.push(e.data); };
+      recorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        clearTimeout(this.timer); this.recording = false;
+        const type = recorder.mimeType || 'audio/webm';
+        const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
+        const blob = new Blob(parts, {type});
+        if (blob.size) this.chooseFile(new File([blob], 'microphone.' + ext, {type}));
+        else this.error = 'No audio was recorded.';
+      };
+      recorder.onerror = () => { this.error = 'Recording failed.'; this.stopRecording(); };
+      this.stream = stream; this.recorder = recorder;
+      this.file = null; this.preset = ''; this.preview(''); this.$refs.upload.value = '';
+      recorder.start(); this.recording = true;
+      this.timer = setTimeout(() => this.stopRecording(), 29000);
+    } catch (e) {
+      stream?.getTracks().forEach(t => t.stop());
+      this.error = 'Microphone access was denied or unavailable.';
+    }
+  },
+  stopRecording() {
+    clearTimeout(this.timer);
+    if (this.recorder?.state === 'recording') this.recorder.stop();
+  },
+  async send() {
+    if (this.busy || (!this.file && !this.preset)) return;
+    this.error = ''; this.result = ''; this.busy = true;
+    try {
+      const form = new FormData();
+      if (this.file) form.append('audio', this.file); else form.append('preset', this.preset);
+      form.append('bias', this.bias);
+      const response = await fetch('/transcribe', {method: 'POST', body: form});
+      const data = await response.json();
+      if (!response.ok) throw Error(data.detail || 'Transcription failed');
+      this.result = data.text || '(No speech detected)';
+    } catch (e) { this.error = e.message; }
+    finally { this.busy = false; }
   }
-}">
-<h1>Hebrew Whisper · Numbers</h1><p>Upload a short recording and choose how numbers should be written.</p>
+})));
+</script></head><body><main x-data="demo">
+<h1>Hebrew Whisper · Numbers</h1><p>Record, upload or select a short Hebrew speech sample.</p>
 <form @submit.prevent="send">
-<label for="audio">Audio file (up to 30 seconds, 25 MB)</label><input id="audio" type="file" accept="audio/*" required @change="file=$event.target.files[0]">
+<div class="source">
+<div><label for="upload">Your audio</label>
+<label class="drop" :class="{'active':drag}" for="upload" @dragenter.prevent="drag=true" @dragover.prevent="drag=true" @dragleave.prevent="drag=false" @drop.prevent="dropFile($event)">
+  Drop audio here or click to select
+  <input id="upload" x-ref="upload" type="file" accept="audio/*,.wav,.mp3,.m4a,.ogg,.webm" @change="chooseFile($event.target.files[0])">
+</label>
+<button type="button" class="secondary" x-show="!recording" @click="startRecording" :disabled="busy">🎙 Record microphone</button>
+<button type="button" x-show="recording" @click="stopRecording">■ Stop recording</button>
+<span class="hint" x-show="recording"> Recording (stops after 29 seconds)…</span></div>
+<div><label for="preset">Or try a preset</label>
+<select id="preset" x-model="preset" @change="choosePreset" :disabled="recording">
+<option value="">Choose one of 20 samples</option>
+<template x-for="item in presets" :key="item.id"><option :value="item.id" x-text="item.label + ' · ' + item.duration + 's'"></option></template>
+</select><p class="hint">Short clips drawn from the local corpus.</p></div></div>
+<p class="selected" x-show="file" x-text="file?.name"></p>
+<audio controls x-show="previewUrl" :src="previewUrl" preload="none"></audio>
 <label for="bias">Number style: <span x-text="bias == 0 ? 'Base model' : (bias < 0 ? 'Digits ' + -bias + '%' : 'Cardinals ' + bias + '%')"></span></label>
 <input id="bias" type="range" min="-100" max="100" step="1" x-model.number="bias">
 <div class="ends"><span>100% digits</span><span>0% · base</span><span>100% cardinals</span></div>
-<button type="submit" :disabled="busy || !file" x-text="busy ? 'Transcribing…' : 'Transcribe'"></button>
+<button type="submit" :disabled="busy || recording || (!file && !preset)" x-text="busy ? 'Transcribing…' : 'Transcribe'"></button>
 </form><p class="error" role="alert" x-show="error" x-text="error"></p>
 <output lang="he" dir="rtl" x-show="result" x-text="result"></output>
-<p class="hint">Only one adapter is active at a time; the middle uses neither. Transcription is not guaranteed to preserve every number.</p>
+<p class="hint">Up to 30 seconds and 25 MB. Only one adapter is active at a time; the middle uses neither.</p>
 </main></body></html>

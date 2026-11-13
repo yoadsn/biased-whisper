@@ -9,3 +9,4 @@ web
 **/__pycache__
 **/.DS_Store
 deploy/assets/**/.cache
+deploy/assets/presets/sources.json

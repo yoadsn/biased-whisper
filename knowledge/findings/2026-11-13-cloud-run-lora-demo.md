@@ -63,3 +63,15 @@ only that user initially. The service-scoped IAP allowlist now contains
 Google-account login has **not yet** been verified; external identities might
 require one-time External OAuth consent/client configuration in the Cloud
 Console. No public invocation was enabled.
+
+# UI and preset expansion
+
+The next image adds browser microphone recording with a 29-second safety
+stop, drag/drop uploads and 20 seeded random short WAVs from the local corpus.
+`deploy/select_presets.py` selects distinct clips from `data/corpus/audio/`,
+filters durations to 0.5–30 seconds and stores only copied audio and a public
+display manifest in ignored image assets. The original source-name map stays
+local and is excluded from the Docker build. Preset playback and transcription
+are served only through the existing IAP-protected service; preset IDs are
+allowlisted, not arbitrary file paths. These are demonstration samples, not a
+new evaluation cohort or quality evidence.

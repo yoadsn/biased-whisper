@@ -9,14 +9,22 @@ mkdir -p deploy/assets/{model,digits,cardinals}
 scp technion-compute-113:/home/yoadsnapir/whisper/biased-whisper/data/runs/phase4-20261107-173859-1395/epoch-01-step-001681/adapter.{json,safetensors} deploy/assets/cardinals/
 scp technion-compute-113:/home/yoadsnapir/whisper/biased-whisper/data/runs/phase4-digits-20261107-204452-834d/epoch-01-step-001269/adapter.{json,safetensors} deploy/assets/digits/
 uv run python -c 'from huggingface_hub import snapshot_download; snapshot_download("ivrit-ai/whisper-large-v3-turbo", revision="f33172a8c3c6efbc040a7200e00835257cac0447", local_dir="deploy/assets/model", allow_patterns=["*.json", "*.safetensors", "*.txt", "*.model", "*.tiktoken"])'
+uv run python -m deploy.select_presets  # 20 seeded random short WAVs from data/corpus/audio/
 docker buildx build --platform linux/amd64 --load -f deploy/Dockerfile -t biased-whisper-l4:local .
 ```
 
 The model is the **ivrit.ai** fine-tune, not OpenAI's generic Whisper turbo;
 both adapters were trained against this model. The slider is -100 (digits),
 0 (untouched base), +100 (cardinals). Intermediate positions scale only the
-selected adapter. The inference server permits a single transcription at once,
-restricts uploads to 25 MB / 30 seconds, and returns Hebrew text without
+selected adapter. The interface offers microphone recording (HTTPS required),
+drag-and-drop uploads, and 20 built-in preset clips. `deploy/select_presets.py`
+shuffles the local WAV corpus with a fixed seed and filters clips to 0.5–30 s.
+The selected audio and its source list live only under gitignored
+`deploy/assets/presets/`; the image includes the audio and a display-only
+manifest, **not** the source file names. Authorized users can play and
+transcribe these clips, so choose a corpus suitable for those users before
+publishing the image. The inference server permits a single transcription at
+once, restricts uploads to 25 MB / 30 seconds, and returns Hebrew text without
 automatic number correction. It does not accept longer clips yet.
 
 To publish a locally built image, tag/push it to Artifact Registry and deploy
