@@ -42,6 +42,7 @@ src/bwhisper/
   phase3.py        control experiments (applies any candidates_<type>.npz)
   phase3_device.py same-condition batched control experiments and discovery-only reference-parity benchmark
   phase3_inference.py CPU mel bank, tokens-only batched cached decoder, batched sequence-contrast probes
+  phase1_latin.py  Latin-axis Phase 1 (`phase1_latin` job); `latin_script.py` holds the transliteration screen and content patterns; UI tab `latin1`
   interactive.py   Test-tab audio validation, Phase 3 edit provenance, cached-model comparisons and queued release
   paramspace.py    stable flat addressing of a parameter subset, sparse edit/undo
   aggregate.py     counts -> common set -> voting -> permutation null -> FDR (pure numpy, unit-tested)

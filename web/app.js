@@ -11,8 +11,15 @@ const OPTIONS = {
   mode: ['range', 'episode'],
   nccl_p2p_level: ['NVL', 'auto', 'LOC', 'PIX', 'PXB', 'PHB', 'SYS'],
   target_style: ['cardinals', 'digits'],
+  content: ['digits', 'latin'],
+  order: ['id', 'random'],
 };
 const HELP = {
+  content: 'what the reference text must contain: digits (digits experiment) or latin (English words in Hebrew sentences)',
+  query: 'explore search regex; non-empty overrides content',
+  ref_regex: 'corpus references must match this regex (default: a Latin-letter run of 2+)',
+  translit_threshold: 'consonant-skeleton / letter-name similarity that counts as a transliteration (heuristic screen, review by eye)',
+  order: 'id = corpus order, random = shuffled with seed',
   capture_backend: 'auto uses GPU-native sparse selection for linear CUDA capture; reference keeps the original CPU path',
   inference_backend: 'auto uses batched tokens-only Phase 3 decoding on CUDA; reference retains the serial decoder',
   batch_size: 'Phase 3 utterances per batch; encoder outputs are recomputed under each edit; precision is unchanged',
@@ -91,7 +98,7 @@ function testWav(chunks, frames, rate) {
 function app() {
   let mic = null; // native audio nodes must not be wrapped in Alpine proxies
   return {
-    tabs: ['overview', 'corpus', 'phase1', 'phase1.5', 'phase2n', 'budget', 'phase3', 'phase4', 'test', 'jobs', 'knowledge'],
+    tabs: ['overview', 'corpus', 'phase1', 'latin1', 'phase1.5', 'phase2n', 'budget', 'phase3', 'phase4', 'test', 'jobs', 'knowledge'],
     tab: location.hash.slice(1) || 'overview',
     settings: {}, device: '', jobs: [], jobTypes: {}, cfgs: {}, OPTIONS, HELP,
     toast: '',
@@ -99,6 +106,7 @@ function app() {
     corpus: { items: [], total: 0, stats: { sources: [], total: 0 }, q: '', source: '', digitsOnly: false, latinOnly: false, offset: 0, limit: 30, sel: null, hf: [], explore: null, curlSearch: '', curlAudio: '', probe: null, order: 'id', metaById: {} },
     // phase 1
     p1: { run: '', rows: [], total: 0, verdicts: {}, filter: '', sel: null, usable: null },
+    lp1: { run: '', rows: [], total: 0, verdicts: {}, filter: '', kind: '', sel: null },
     p15: { run: '', summary: null, unitSrc: 'model_baseline' },
     p2: { run: '', summary: null, type: 'to_cardinal', cands: [], candTotal: 0, candOffset: 0 },
     p2n: { run: '', chosen: [], summary: null, p1runs: [], verdicts: ['cardinal', 'human_good'], usable: null },
@@ -138,7 +146,7 @@ function app() {
       this.jobs = await this.api('/api/jobs');
       const active = this.jobs.filter(j => ['running', 'queued'].includes(j.status));
       // live refresh of the selected run's results
-      for (const [sel, type, fn] of [[this.p1.run, 'phase1', () => this.loadP1()], [this.p15.run, 'phase1_5', () => this.loadP15()], [this.p2.run, 'phase2', () => this.loadP2()], [this.p2n.run, 'phase2n', () => this.loadP2n()], [this.bud.run, 'budget_sweep', () => this.loadBud()], [this.p3.run, 'phase3', () => this.loadP3()]]) {
+      for (const [sel, type, fn] of [[this.p1.run, 'phase1', () => this.loadP1()], [this.lp1.run, 'phase1_latin', () => this.loadLP1()], [this.p15.run, 'phase1_5', () => this.loadP15()], [this.p2.run, 'phase2', () => this.loadP2()], [this.p2n.run, 'phase2n', () => this.loadP2n()], [this.bud.run, 'budget_sweep', () => this.loadBud()], [this.p3.run, 'phase3', () => this.loadP3()]]) {
         const j = this.jobs.find(x => x.id === sel);
         const was = prev.find(x => x.id === sel);
         if (j && (['running'].includes(j.status) || (was && was.status !== j.status))) fn();
@@ -170,7 +178,7 @@ function app() {
     fields(type) { return Object.keys(this.cfgs[type] || {}).filter(k => !this.hidden(type).includes(k)); },
     hidden(type) {
       if (type === 'phase4') return this.cfgs.phase4?.parallel ? ['device', 'gradient_accumulation'] : ['devices', 'global_batch_size', 'checkpoint_every_steps', 'worker_timeout_seconds', 'cpu_threads_per_worker', 'nccl_p2p_level'];
-      return { phase1: ['sample_ids'], phase2: ['phase1_runs', 'verdicts'], phase2n: ['phase1_runs', 'verdicts', 'sample_ids'], budget_sweep: ['phase1_runs'], phase3: ['phase2_run', 'eval_sample_ids'] }[type] || [];
+      return { phase1: ['sample_ids'], phase1_latin: ['sample_ids', 'device'], phase2: ['phase1_runs', 'verdicts'], phase2n: ['phase1_runs', 'verdicts', 'sample_ids'], budget_sweep: ['phase1_runs'], phase3: ['phase2_run', 'eval_sample_ids'] }[type] || [];
     },
     kind(type, k) {
       const d = this.jobTypes[type].defaults[k], v = this.cfgs[type][k];
@@ -195,6 +203,7 @@ function app() {
       if (t !== 'test' && mic) this.stopTestMic();
       if (t === 'corpus') this.loadCorpus(true);
       if (t === 'phase1') { this.loadUsable(); if (!this.p1.run) this.pickLatest('phase1'); }
+      if (t === 'latin1') { this.loadLatinStats(); if (!this.lp1.run) this.pickLatest('phase1_latin'); }
       if (t === 'phase1.5') { if (!this.p15.run) this.pickLatest('phase1_5'); }
       if (t === 'phase2') { if (!this.p2.run) this.pickLatest('phase2'); }
       if (t === 'phase2n') { this.initP2n(); if (!this.p2n.run) this.pickLatest('phase2n'); }
@@ -212,6 +221,7 @@ function app() {
       const j = this.byType(type)[0];
       if (!j) return;
       if (type === 'phase1') this.selectP1(j.id);
+      if (type === 'phase1_latin') this.selectLP1(j.id);
       if (type === 'phase1_5') this.selectP15(j.id);
       if (type === 'phase2') this.selectP2(j.id);
       if (type === 'phase2n') this.selectP2n(j.id);
@@ -271,6 +281,31 @@ function app() {
     async setVerdict(r, v) {
       await this.api(`/api/phase1/${this.p1.run}/verdict`, 'POST', { sample_id: r.sample_id, verdict: v });
       this.p1.verdicts = await this.api(`/api/phase1/${this.p1.run}/verdicts`);
+    },
+    // ---------------- Latin phase 1
+    async loadLatinStats() { this.corpus.stats = await this.api('/api/corpus/stats'); },
+    latinSamples() { return this.corpus.stats.sources.reduce((n, s) => n + (s.with_latin || 0), 0); },
+    selectLP1(id) { this.lp1.run = id; this.lp1.sel = null; this.loadLP1(); this.watchLog(id); },
+    async loadLP1() {
+      if (!this.lp1.run) return;
+      const r = await this.api(`/api/jobs/${this.lp1.run}/rows?limit=5000`);
+      this.lp1.rows = r.items; this.lp1.total = r.total;
+      this.lp1.verdicts = await this.api(`/api/phase1/${this.lp1.run}/verdicts`);
+      if (this.lp1.sel) this.lp1.sel = this.lp1.rows.find(x => x.sample_id === this.lp1.sel.sample_id) || null;
+    },
+    lpEff(r) { const h = this.lp1.verdicts[r.sample_id]; return h ? 'human_' + h : r.verdict; },
+    lp1rows() { const { filter, kind } = this.lp1; return this.lp1.rows.filter(r => (!filter || this.lpEff(r) === filter || r.verdict === filter) && (!kind || r.latin_kind === kind)); },
+    lp1counts() { const c = {}; for (const r of this.lp1.rows) c[this.lpEff(r)] = (c[this.lpEff(r)] || 0) + 1; return Object.entries(c); },
+    lp1kinds() { const c = {}; for (const r of this.lp1.rows) if (r.latin_kind) c[r.latin_kind] = (c[r.latin_kind] || 0) + 1; return Object.entries(c); },
+    lp1table() {
+      // verdict x kind among clips whose free decode contained a Latin span
+      const t = {};
+      for (const r of this.lp1.rows) if (r.has_latin) { const k = r.latin_kind || '—'; (t[k] ||= { n: 0 }); t[k].n++; t[k][r.verdict] = (t[k][r.verdict] || 0) + 1; }
+      return Object.entries(t);
+    },
+    async setLVerdict(r, v) {
+      await this.api(`/api/phase1/${this.lp1.run}/verdict`, 'POST', { sample_id: r.sample_id, verdict: v });
+      this.lp1.verdicts = await this.api(`/api/phase1/${this.lp1.run}/verdicts`);
     },
     hlDigits(t) { return esc(t).replace(/(\S*\d\S*)/g, '<mark class="dig">$1</mark>'); },
     hlText(t) { return esc(t).replace(/(\S*(?:\d|[A-Za-z]{2,})\S*)/g, '<mark class="dig">$1</mark>'); },

@@ -46,9 +46,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .rtl { direction: rtl; text-align: right; unicode-bidi: plaintext; font-size: 16px; line-height: 1.7; }
 textarea.rtl { width: 100%; min-height: 80px; }
 .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; background: var(--line); }
-.pill.cardinal, .pill.good, .pill.done, .pill.human_good { background: color-mix(in srgb, var(--good) 25%, transparent); color: var(--good); }
-.pill.degenerate, .pill.failed, .pill.bad, .pill.human_bad, .pill.still_digits, .pill.error { background: color-mix(in srgb, var(--bad) 22%, transparent); color: var(--bad); }
-.pill.partial, .pill.no_number_words, .pill.running, .pill.queued, .pill.interrupted, .pill.cancelled { background: color-mix(in srgb, var(--warn) 25%, transparent); color: var(--warn); }
+.pill.cardinal, .pill.translit, .pill.good, .pill.done, .pill.human_good { background: color-mix(in srgb, var(--good) 25%, transparent); color: var(--good); }
+.pill.degenerate, .pill.no_hebrew, .pill.latin_leak, .pill.failed, .pill.bad, .pill.human_bad, .pill.still_digits, .pill.error { background: color-mix(in srgb, var(--bad) 22%, transparent); color: var(--bad); }
+.pill.partial, .pill.no_number_words, .pill.other_hebrew, .pill.running, .pill.queued, .pill.interrupted, .pill.cancelled { background: color-mix(in srgb, var(--warn) 25%, transparent); color: var(--warn); }
 mark.dig { background: var(--digit); color: inherit; border-radius: 3px; padding: 0 2px; }
 mark.word { background: var(--word); color: inherit; border-radius: 3px; padding: 0 2px; }
 .bar { height: 10px; background: var(--accent); border-radius: 3px; min-width: 1px; }

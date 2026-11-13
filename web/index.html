@@ -56,14 +56,14 @@
       <h3>Pipeline state</h3>
       <div class="kv">
         <span>corpus</span><span><b x-text="corpus.stats.total"></b> samples <a href="#corpus" @click="tab='corpus'">→</a></span>
-        <template x-for="p in ['phase1','phase2n','phase3','phase4']" :key="p">
+        <template x-for="p in ['phase1','phase1_latin','phase2n','phase3','phase4']" :key="p">
           <template x-if="true">
             <span style="display:contents">
               <span x-text="p"></span>
               <span>
                 <template x-if="byType(p)[0]"><span><span class="pill" :class="byType(p)[0].status" x-text="byType(p)[0].status"></span>
                   <span class="small mono" x-text="byType(p)[0].id"></span>
-                  <a :href="'#'+p" @click="tab=p">→</a></span></template>
+                  <a :href="'#'+(p==='phase1_latin'?'latin1':p)" @click="tab=(p==='phase1_latin'?'latin1':p)">→</a></span></template>
                 <template x-if="!byType(p)[0]"><span class="muted">no runs yet</span></template>
               </span>
             </span>
@@ -299,6 +299,121 @@
               <button class="btn good" @click="setVerdict(p1.sel,'good')">good (use in phase 2)</button>
               <button class="btn bad" @click="setVerdict(p1.sel,'bad')">bad</button>
               <button class="btn sec" @click="setVerdict(p1.sel,null)">clear</button>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= LATIN PHASE 1 ======================= -->
+<section x-show="tab==='latin1'">
+  <h2>Latin · Phase 1 — does the model know a Hebrew spelling?</h2>
+  <p class="muted small">Decode freely; at the first Latin-letter token, rewind to the start of its span (prefix + hyphen), ban <b>every</b> Latin-letter token and continue. A <span class="pill translit">translit</span> verdict means the banned path wrote the span in Hebrew letters and its consonant skeleton (or letter names, for acronyms) resembles the Latin word. The check is a heuristic: review pairs by hand, <i>good</i>/<i>bad</i> override it. Samples come from the Corpus tab (<b>content: latin</b>).</p>
+  <div class="card">
+    <div class="small muted" style="margin-bottom:6px"><b x-text="latinSamples()"></b> corpus samples contain Latin words
+      <a href="#corpus" @click="tab='corpus'">→ corpus</a></div>
+    <div class="cfg" data-cfg="phase1_latin"></div>
+    <div class="row" style="margin-top:8px">
+      <button class="btn" @click="launch('phase1_latin').then(j=>selectLP1(j.id))">Run Latin phase 1</button>
+      <button class="btn sec" @click="cfgs.phase1_latin.model=settings.model_smoke;cfgs.phase1_latin.limit=10">smoke preset (tiny, 10)</button>
+      <span class="small muted">model null → active model; picks corpus samples whose reference matches ref_regex</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <b>Run</b>
+      <select x-model="lp1.run" @change="selectLP1(lp1.run)">
+        <option value="">—</option>
+        <template x-for="j in byType('phase1_latin')" :key="j.id"><option :value="j.id" x-text="j.id+' ['+j.status+']'"></option></template>
+      </select>
+      <template x-if="job(lp1.run)">
+        <span class="row">
+          <span class="pill" :class="job(lp1.run).status" x-text="job(lp1.run).status"></span>
+          <span class="progress"><div :style="'width:'+pct(job(lp1.run))+'%'"></div></span>
+          <span class="small muted" x-text="job(lp1.run).progress.done+'/'+job(lp1.run).progress.total"></span>
+          <button class="btn sec" x-show="job(lp1.run).status==='running'" @click="cancel(lp1.run)">cancel</button>
+        </span>
+      </template>
+    </div>
+    <template x-if="job(lp1.run)&&job(lp1.run).error"><p class="note" x-text="job(lp1.run).error"></p></template>
+    <template x-if="lp1.rows.length">
+      <div class="scroll" style="margin-top:8px"><table>
+        <thead><tr><th>first Latin span</th><th class="num">clips</th><th class="num">translit</th><th class="num">other Hebrew</th><th class="num">no Hebrew</th><th class="num">other</th></tr></thead>
+        <tbody><template x-for="[k,t] in lp1table()" :key="k"><tr>
+          <td x-text="k"></td><td class="num" x-text="t.n"></td>
+          <td class="num" x-text="(t.translit||0)+' ('+Math.round(100*(t.translit||0)/t.n)+'%)'"></td>
+          <td class="num" x-text="t.other_hebrew||0"></td><td class="num" x-text="t.no_hebrew||0"></td>
+          <td class="num" x-text="t.n-(t.translit||0)-(t.other_hebrew||0)-(t.no_hebrew||0)"></td></tr></template></tbody>
+      </table>
+      <div class="small muted" style="margin-top:4px" x-text="'baseline already Hebrew (no Latin): '+lp1.rows.filter(r=>!r.has_latin).length+' of '+lp1.rows.length+' clips · word = ordinary word, acronym = ALLCAPS, symbol = has digits'"></div></div>
+    </template>
+    <div class="row" style="margin-top:8px">
+      <span class="small muted">filter:</span>
+      <button class="btn sec" :style="lp1.filter===''?'outline:2px solid var(--accent)':''" @click="lp1.filter=''">all (<span x-text="lp1.rows.length"></span>)</button>
+      <template x-for="[k,n] in lp1counts()" :key="k"><button class="btn sec" :style="lp1.filter===k?'outline:2px solid var(--accent)':''" @click="lp1.filter=k"><span x-text="k+' '+n"></span></button></template>
+      <span class="small muted">kind:</span>
+      <button class="btn sec" :style="lp1.kind===''?'outline:2px solid var(--accent)':''" @click="lp1.kind=''">any</button>
+      <template x-for="[k,n] in lp1kinds()" :key="k"><button class="btn sec" :style="lp1.kind===k?'outline:2px solid var(--accent)':''" @click="lp1.kind=k"><span x-text="k+' '+n"></span></button></template>
+    </div>
+    <div class="cols2" style="margin-top:10px;align-items:start">
+      <div class="scroll"><table>
+        <thead><tr><th>#</th><th>verdict</th><th>kind</th><th class="num">score</th><th class="num">p(latin)</th><th>latin → hebrew span</th></tr></thead>
+        <tbody>
+          <template x-for="r in lp1rows()" :key="r.sample_id">
+            <tr class="click" :class="{sel:lp1.sel&&lp1.sel.sample_id===r.sample_id}" @click="lp1.sel=r">
+              <td x-text="r.sample_id"></td>
+              <td><span class="pill" :class="lpEff(r)" x-text="lpEff(r)"></span></td>
+              <td class="small" x-text="r.latin_kind||''"></td>
+              <td class="num" x-text="f(r.translit_score,2)"></td>
+              <td class="num" x-text="f(r.dist_free_at_first_latin&&r.dist_free_at_first_latin.p_latin,2)"></td>
+              <td dir="ltr" style="text-align:left" x-show="r.has_latin"><span class="mono" x-text="(r.latin_span||'').trim().slice(0,40)"></span> → <span dir="rtl" style="unicode-bidi:isolate" x-text="(r.hebrew_span||'').trim().slice(0,50)"></span></td>
+              <td class="rtl small muted" x-show="!r.has_latin" x-text="(r.baseline_text||'').slice(0,60)"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table></div>
+      <div style="position:sticky;top:60px">
+        <template x-if="lp1.sel">
+          <div class="card">
+            <div class="row"><b x-text="'sample #'+lp1.sel.sample_id"></b><span class="pill" :class="lpEff(lp1.sel)" x-text="lpEff(lp1.sel)"></span>
+              <span class="small muted" x-text="'auto: '+lp1.sel.verdict"></span></div>
+            <audio controls :src="'/api/corpus/'+lp1.sel.sample_id+'/audio'" style="width:100%;margin:8px 0"></audio>
+            <h3>reference</h3><div class="rtl" x-html="hlText(lp1.sel.ref_text)"></div>
+            <h3>free decode</h3><div class="rtl" x-html="hlText(lp1.sel.baseline_text)"></div>
+            <template x-if="lp1.sel.has_latin">
+              <div>
+                <div class="card" style="margin:8px 0;padding:10px">
+                  <h3>span</h3>
+                  <div class="small muted mono">
+                    decision: <b x-text="lp1.sel.decision_index ?? '—'"></b> ·
+                    rewind: <b x-text="lp1.sel.rewind_index ?? '—'"></b> ·
+                    first Latin: <b x-text="lp1.sel.first_latin_index ?? '—'"></b> ·
+                    kind: <b x-text="lp1.sel.latin_kind || '—'"></b> ·
+                    transliteration score: <b x-text="f(lp1.sel.translit_score,2)"></b>
+                  </div>
+                  <div class="cols2" style="margin-top:6px">
+                    <div class="rtl" x-text="'latin path: ' + (lp1.sel.latin_span ?? '')"></div>
+                    <div class="rtl" x-text="'hebrew path: ' + (lp1.sel.hebrew_span ?? '')"></div>
+                  </div>
+                </div>
+                <h3>Latin letters banned from the decision point</h3>
+                <div class="rtl" x-text="lp1.sel.suppressed_text"></div>
+                <div class="small muted" x-text="'rest-of-sentence word match: '+pct1(lp1.sel.rest_match)+' · ended: '+lp1.sel.suppressed_ended"></div>
+                <div class="cols2" style="margin-top:8px">
+                  <div><h3>top-k at first Latin token (free)</h3>
+                    <table><template x-for="t in (lp1.sel.dist_free_at_first_latin||{}).top||[]"><tr><td class="mono tok" x-text="JSON.stringify(t.tok)"></td><td class="num" x-text="f(t.p,3)"></td><td x-text="t.latin?'latin':''"></td></tr></template></table></div>
+                  <div><h3>top-k (Latin banned)</h3>
+                    <table><template x-for="t in (lp1.sel.dist_banned||{}).top||[]"><tr><td class="mono tok" x-text="JSON.stringify(t.tok)"></td><td class="num" x-text="f(t.p,3)"></td></tr></template></table></div>
+                </div>
+              </div>
+            </template>
+            <div class="row" style="margin-top:10px">
+              <button class="btn good" @click="setLVerdict(lp1.sel,'good')">good transliteration</button>
+              <button class="btn bad" @click="setLVerdict(lp1.sel,'bad')">bad</button>
+              <button class="btn sec" @click="setLVerdict(lp1.sel,null)">clear</button>
             </div>
           </div>
         </template>
