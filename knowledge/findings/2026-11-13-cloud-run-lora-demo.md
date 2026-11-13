@@ -66,7 +66,7 @@ Console. No public invocation was enabled.
 
 # UI and preset expansion
 
-The next image adds browser microphone recording with a 29-second safety
+The second image adds browser microphone recording with a 29-second safety
 stop, drag/drop uploads and 20 seeded random short WAVs from the local corpus.
 `deploy/select_presets.py` selects distinct clips from `data/corpus/audio/`,
 filters durations to 0.5–30 seconds and stores only copied audio and a public
@@ -75,3 +75,14 @@ local and is excluded from the Docker build. Preset playback and transcription
 are served only through the existing IAP-protected service; preset IDs are
 allowlisted, not arbitrary file paths. These are demonstration samples, not a
 new evaluation cohort or quality evidence.
+
+The corrected `linux/amd64` image was pushed as
+`sha256:49899a55f3ef5fded8b475209e483d815b5582c67c66264d1fcc3660bcd25410`.
+Revision `biased-whisper-l4-00002-pmq` is ready and serving all traffic.
+IAP remained enabled; all three named user grants and the IAP service agent's
+invoker grant were preserved. An unauthenticated request still redirects to
+Google sign-in. Local tests include a real unseekable MediaRecorder-style WebM
+(no duration metadata) and a 20-preset browser/UI smoke test with a fake model;
+the production private API was not called for these new presets because a
+plain gcloud user ID token is rejected by IAP. Startup readiness validates
+that all preset files are present in the deployed image.

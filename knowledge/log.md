@@ -2,6 +2,7 @@
 
 ## 2026-11-13
 
+* Deployed the baked preset/microphone/drag-drop UI image to Cloud Run revision `biased-whisper-l4-00002-pmq`; readiness and IAM/IAP policy verified, no proxy left running. Local fake-model browser preset flow, 70 targeted tests and real WebM decode passed. See `/findings/2026-11-13-cloud-run-lora-demo.md`.
 * Added microphone recording, drag/drop uploads and 20 reproducibly randomized local corpus presets to the Cloud Run demo; preset audio remains gitignored and is baked into the next image. See `/findings/2026-11-13-cloud-run-lora-demo.md`.
 * Added `yair@lifshitz.io` and `yanirmr@gmail.com` to the Cloud Run service's IAP allowlist; policy now contains exactly these two reviewers and `yoadsn@gmail.com`.
 * Corrected browser 403 by enabling direct Cloud Run IAP and granting the IAP service agent Invoker plus `yoadsn@gmail.com` service-scoped IAP access. The URL now redirects to Google sign-in; owner login and additional reviewer email grants remain to be verified. See `/findings/2026-11-13-cloud-run-lora-demo.md`.

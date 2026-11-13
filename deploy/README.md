@@ -78,7 +78,7 @@ IAP guide](https://docs.cloud.google.com/run/docs/securing/identity-aware-proxy-
 Minimum instances zero allows scale-to-zero; the first request can have a
 long cold start.
 
-Deployed revision `biased-whisper-l4-00001-j9h` is ready at
+Deployed revision `biased-whisper-l4-00002-pmq` is ready at
 <https://biased-whisper-l4-que2njye2q-ew.a.run.app> (IAP Google sign-in;
 service-scoped user allowlist). The image was pushed with digest
-`sha256:ddc34bd9084e745b3ab6fc7724bec3c26f314dc5ef9e0d560af095a717fe10eb`.
+`sha256:49899a55f3ef5fded8b475209e483d815b5582c67c66264d1fcc3660bcd25410`.
