@@ -30,6 +30,8 @@ docker tag biased-whisper-l4:local "$IMAGE"
 # use an isolated DOCKER_CONFIG so the credential is not stored in the user's usual Docker config.
 DOCKER_CONFIG="$(mktemp -d)"; export DOCKER_CONFIG
 gcloud auth print-access-token --account=yoadsn@gmail.com | docker login -u oauth2accesstoken --password-stdin https://europe-west1-docker.pkg.dev
+# An isolated config cannot resolve named contexts; point Docker at Colima's socket.
+DOCKER_HOST="$(docker --config "$HOME/.docker" context inspect colima --format '{{.Endpoints.docker.Host}}')"; export DOCKER_HOST
 docker push "$IMAGE"
 gcloud run deploy biased-whisper-l4 --image "$IMAGE" \
   --account=yoadsn@gmail.com --project=project-71583fab-5cd0-4bba-a6f --region=europe-west1 \
