@@ -60,7 +60,9 @@ gcloud iap web add-iam-policy-binding --member=user:yoadsn@gmail.com \
   --project=project-71583fab-5cd0-4bba-a6f --account=yoadsn@gmail.com
 ```
 
-Repeat the last command with each reviewer email. Do **not** use `allUsers`:
+The service allowlist currently contains `yoadsn@gmail.com`,
+`yair@lifshitz.io` and `yanirmr@gmail.com`. Repeat the last command with any
+additional reviewer email. Do **not** use `allUsers`:
 public GPU inference can incur unbounded charges. If a Gmail account outside
 the project's Google organization is denied *after* login, configure an
 External OAuth client for IAP in the Cloud Console; see [Google's Cloud Run

@@ -2,6 +2,7 @@
 
 ## 2026-11-13
 
+* Added `yair@lifshitz.io` and `yanirmr@gmail.com` to the Cloud Run service's IAP allowlist; policy now contains exactly these two reviewers and `yoadsn@gmail.com`.
 * Corrected browser 403 by enabling direct Cloud Run IAP and granting the IAP service agent Invoker plus `yoadsn@gmail.com` service-scoped IAP access. The URL now redirects to Google sign-in; owner login and additional reviewer email grants remain to be verified. See `/findings/2026-11-13-cloud-run-lora-demo.md`.
 * Built and deployed baked amd64 image `sha256:ddc34bd9084e745b3ab6fc7724bec3c26f314dc5ef9e0d560af095a717fe10eb` to IAM-private Cloud Run L4 revision `biased-whisper-l4-00001-j9h` in `europe-west1` using `yoadsn@gmail.com`; authenticated readiness, UI and three-style speech smoke tests passed. See `/findings/2026-11-13-cloud-run-lora-demo.md`.
 * Selected the latest completed Phase 4 digit/cardinal adapter checkpoints for an IAM-private Cloud Run L4 demo; documented slider semantics and model provenance in `/findings/2026-11-13-cloud-run-lora-demo.md`.

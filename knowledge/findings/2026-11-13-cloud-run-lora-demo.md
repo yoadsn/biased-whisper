@@ -58,7 +58,8 @@ enabled on the existing service on 2026-11-13. The IAP service agent received
 service-scoped `roles/run.invoker`; `yoadsn@gmail.com` received service-scoped
 `roles/iap.httpsResourceAccessor`. An unauthenticated HTTP request now returns
 302 to Google's OAuth sign-in page instead of 403, and the IAP policy lists
-only that user. A completed Google-account login has **not yet** been verified;
-external Gmail identities might require one-time External OAuth consent/client
-configuration in the Cloud Console. Reviewer email grants are pending their
-actual email addresses. No public invocation was enabled.
+only that user initially. The service-scoped IAP allowlist now contains
+`yoadsn@gmail.com`, `yair@lifshitz.io` and `yanirmr@gmail.com`. A completed
+Google-account login has **not yet** been verified; external identities might
+require one-time External OAuth consent/client configuration in the Cloud
+Console. No public invocation was enabled.
