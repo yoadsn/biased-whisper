@@ -20,6 +20,7 @@ from . import phase3 as _p3  # noqa: F401
 from . import phase3_device as _p3_device  # noqa: F401
 from . import interactive
 from . import phase1_5 as _p15  # noqa: F401
+from . import phase1_latin as _p1_latin  # noqa: F401
 from . import budget as _bud  # noqa: F401
 from . import budget_device as _budget_device  # noqa: F401
 from . import phase2n as _p2n  # noqa: F401

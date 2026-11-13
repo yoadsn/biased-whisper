@@ -77,6 +77,19 @@ PHASE1_DEFAULTS: dict[str, Any] = {
     "satellites_run": None,  # phase1_5 run supplying satellite tokens; null -> latest, or built-in rules
 }
 
+PHASE1_LATIN_DEFAULTS: dict[str, Any] = {
+    "model": None,  # None -> settings.model_active
+    "device": None,
+    "sample_ids": None,  # explicit corpus ids, or None to filter by ref_regex
+    "source": None,
+    "ref_regex": r"[A-Za-z]{2,}",  # reference must contain a Latin-letter run
+    "order": "id",  # id | random
+    "seed": 0,
+    "limit": 50,
+    "max_new_tokens": 96,
+    "translit_threshold": 0.6,  # consonant-skeleton similarity that counts as a transliteration (heuristic)
+}
+
 PHASE2_DEFAULTS: dict[str, Any] = {
     "model": None,
     "capture_backend": "auto",  # auto: device-native linear capture on CUDA; reference: original CPU path

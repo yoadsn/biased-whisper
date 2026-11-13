@@ -6,6 +6,7 @@ okf_version: "0.2"
 
 * [Hypothesis](theory/hypothesis.md) - the theory being tested, in the owner's words, with definitions
 * [Review of the approach](theory/review-of-approach.md) - critique, fixes made, open risks and alternatives
+* [Latin vs transliteration hypothesis](theory/latin-script-hypothesis.md) - second axis: English words in Latin letters vs Hebrew transliteration, mapped onto the same harness
 
 # Plan
 
@@ -29,6 +30,7 @@ okf_version: "0.2"
 
 # Findings
 
+* [2026-11-13 Latin-axis Phase 1 POC](findings/2026-11-13-latin-phase1-poc.md) - banning Latin tokens yields Hebrew spellings for short words and most acronyms, not phrases; 332 clips, turbo, laptop; 90% of short words convert
 * [2026-11-13 Cloud Run LoRA demo](findings/2026-11-13-cloud-run-lora-demo.md) - selected digit/cardinal checkpoints and deployment semantics
 
 * [2026-11-07 Phase 4 parallel validation](findings/2026-11-07-phase4-parallel-validation.md) - eight-rank NCCL/update checks, serial/parallel frozen-teacher equivalence and NVLink-only P2P workaround; synthetic only
