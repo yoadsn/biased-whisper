@@ -42,10 +42,23 @@ On 2026-11-13, the local amd64 image was built and pushed to Artifact Registry
 as `hebrew-tts/biased-whisper-l4:20261113`, digest
 `sha256:ddc34bd9084e745b3ab6fc7724bec3c26f314dc5ef9e0d560af095a717fe10eb`.
 Cloud Run revision `biased-whisper-l4-00001-j9h` is ready in `europe-west1`
-with one L4, 4 CPU, 16 GiB, concurrency 1, min instances 0 and IAM-only
-invocation. `/ready` reports digits step 1269 and cardinals step 1681.
+with one L4, 4 CPU, 16 GiB, concurrency 1, min instances 0 and initially
+IAM-only invocation. `/ready` reports digits step 1269 and cardinals step 1681.
 Authenticated requests for a 2.2-second existing Explore speech clip returned
 `אנחנו ב-1850.` at -100 and midpoint, versus
 `אנחנו באלף שמונה מאות חמישים.` at +100. This is a functional smoke test,
 not an accuracy evaluation. The HTML UI loaded through the authenticated
 Cloud Run proxy, with its slider, upload and submit controls visible.
+
+# Browser access correction
+
+The owner's ordinary browser received Forbidden: Cloud Run IAM-only invoker
+authentication does not initiate Google login. Direct Cloud Run IAP was
+enabled on the existing service on 2026-11-13. The IAP service agent received
+service-scoped `roles/run.invoker`; `yoadsn@gmail.com` received service-scoped
+`roles/iap.httpsResourceAccessor`. An unauthenticated HTTP request now returns
+302 to Google's OAuth sign-in page instead of 403, and the IAP policy lists
+only that user. A completed Google-account login has **not yet** been verified;
+external Gmail identities might require one-time External OAuth consent/client
+configuration in the Cloud Console. Reviewer email grants are pending their
+actual email addresses. No public invocation was enabled.

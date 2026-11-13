@@ -38,17 +38,37 @@ gcloud run deploy biased-whisper-l4 --image "$IMAGE" \
   --execution-environment=gen2 --port=8080 --cpu=4 --memory=16Gi \
   --gpu=1 --gpu-type=nvidia-l4 --no-gpu-zonal-redundancy \
   --cpu-boost --no-cpu-throttling --concurrency=1 --timeout=900 \
-  --min-instances=0 --max-instances=1 --no-allow-unauthenticated \
+  --min-instances=0 --max-instances=1 --no-allow-unauthenticated --iap \
   --startup-probe=httpGet.path=/ready,periodSeconds=10,timeoutSeconds=10,failureThreshold=24
 ```
 
-Use `gcloud run services proxy biased-whisper-l4 --account=yoadsn@gmail.com
---project=project-71583fab-5cd0-4bba-a6f --region=europe-west1 --port=8080`
-and open <http://localhost:8080/>. Private-by-default is deliberate: making
-GPU inference publicly callable can incur unbounded charges. Minimum instances
-zero allows scale-to-zero; the first request can have a long cold start.
+IAP protects the normal browser URL with Google sign-in. An IAM-only Cloud
+Run service returns `Forbidden` in a browser because ordinary navigation does
+not send a Cloud Run ID token. For an existing service, enable direct IAP and
+grant it the only Cloud Run Invoker permission it needs:
+
+```bash
+gcloud run services update biased-whisper-l4 --iap --account=yoadsn@gmail.com \
+  --project=project-71583fab-5cd0-4bba-a6f --region=europe-west1
+gcloud run services add-iam-policy-binding biased-whisper-l4 \
+  --member=serviceAccount:service-843531170072@gcp-sa-iap.iam.gserviceaccount.com \
+  --role=roles/run.invoker --account=yoadsn@gmail.com \
+  --project=project-71583fab-5cd0-4bba-a6f --region=europe-west1
+gcloud iap web add-iam-policy-binding --member=user:yoadsn@gmail.com \
+  --role=roles/iap.httpsResourceAccessor --resource-type=cloud-run \
+  --service=biased-whisper-l4 --region=europe-west1 \
+  --project=project-71583fab-5cd0-4bba-a6f --account=yoadsn@gmail.com
+```
+
+Repeat the last command with each reviewer email. Do **not** use `allUsers`:
+public GPU inference can incur unbounded charges. If a Gmail account outside
+the project's Google organization is denied *after* login, configure an
+External OAuth client for IAP in the Cloud Console; see [Google's Cloud Run
+IAP guide](https://docs.cloud.google.com/run/docs/securing/identity-aware-proxy-cloud-run#custom-oauth-client).
+Minimum instances zero allows scale-to-zero; the first request can have a
+long cold start.
 
 Deployed revision `biased-whisper-l4-00001-j9h` is ready at
-<https://biased-whisper-l4-que2njye2q-ew.a.run.app> (IAM authentication
-required). The image was pushed with digest
+<https://biased-whisper-l4-que2njye2q-ew.a.run.app> (IAP Google sign-in;
+service-scoped user allowlist). The image was pushed with digest
 `sha256:ddc34bd9084e745b3ab6fc7724bec3c26f314dc5ef9e0d560af095a717fe10eb`.
