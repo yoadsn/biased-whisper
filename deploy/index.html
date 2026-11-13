@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hebrew Whisper · Numbers</title>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
+<style>
+body{font-family:system-ui,sans-serif;max-width:640px;margin:4rem auto;padding:0 1rem;color:#172338;background:#f6f8fc}
+main{background:white;padding:2rem;border-radius:18px;box-shadow:0 8px 40px #17233812}h1{margin-top:0}
+label{display:block;margin:1.4rem 0 .5rem;font-weight:600}input[type=file]{width:100%}
+input[type=range]{width:100%;accent-color:#315bbb}.ends{display:flex;justify-content:space-between;color:#53647c}
+button{background:#315bbb;border:0;border-radius:8px;color:white;padding:.8rem 1.4rem;cursor:pointer;margin-top:1.5rem}
+button:disabled{opacity:.55;cursor:wait}output{display:block;white-space:pre-wrap;line-height:1.8;font-size:1.3rem;background:#f1f4fa;border-radius:8px;padding:1rem;margin-top:1.5rem;min-height:2rem}
+.error{color:#a02b37}.hint{color:#53647c;font-size:.9rem}
+</style></head><body><main x-data="{
+  bias:0, file:null, result:'', error:'', busy:false,
+  async send(){this.error='';this.result='';if(!this.file)return;this.busy=true;
+    try{let form=new FormData();form.append('audio',this.file);form.append('bias',this.bias);
+      let response=await fetch('/transcribe',{method:'POST',body:form});let data=await response.json();
+      if(!response.ok)throw Error(data.detail || 'Transcription failed');this.result=data.text || '(No speech detected)';
+    }catch(e){this.error=e.message}finally{this.busy=false}
+  }
+}">
+<h1>Hebrew Whisper · Numbers</h1><p>Upload a short recording and choose how numbers should be written.</p>
+<form @submit.prevent="send">
+<label for="audio">Audio file (up to 30 seconds, 25 MB)</label><input id="audio" type="file" accept="audio/*" required @change="file=$event.target.files[0]">
+<label for="bias">Number style: <span x-text="bias == 0 ? 'Base model' : (bias < 0 ? 'Digits ' + -bias + '%' : 'Cardinals ' + bias + '%')"></span></label>
+<input id="bias" type="range" min="-100" max="100" step="1" x-model.number="bias">
+<div class="ends"><span>100% digits</span><span>0% · base</span><span>100% cardinals</span></div>
+<button type="submit" :disabled="busy || !file" x-text="busy ? 'Transcribing…' : 'Transcribe'"></button>
+</form><p class="error" role="alert" x-show="error" x-text="error"></p>
+<output lang="he" dir="rtl" x-show="result" x-text="result"></output>
+<p class="hint">Only one adapter is active at a time; the middle uses neither. Transcription is not guaranteed to preserve every number.</p>
+</main></body></html>

@@ -29,6 +29,8 @@ okf_version: "0.2"
 
 # Findings
 
+* [2026-11-13 Cloud Run LoRA demo](findings/2026-11-13-cloud-run-lora-demo.md) - selected digit/cardinal checkpoints and deployment semantics
+
 * [2026-11-07 Phase 4 parallel validation](findings/2026-11-07-phase4-parallel-validation.md) - eight-rank NCCL/update checks, serial/parallel frozen-teacher equivalence and NVLink-only P2P workaround; synthetic only
 * [2026-11-07 controller establishment](findings/2026-11-07-controller-establishment.md) - bounded correctness sampling, rejected digit-only wins, balanced rediscovery and conservative integer-value filtering of contrast targets
 * [2026-11-07 microphone nudge audit](findings/2026-11-07-microphone-nudge-audit.md) - saved owner failure uses correct nudges; held-out digit share overstates correctness; head gain ×10 correctly converts the saved 1948 sentence in one bounded follow-up
