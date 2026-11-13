@@ -9,6 +9,8 @@ const OPTIONS = {
   stat: ['mean_all', 'mean_present', 'median_present'],
   direction: ['to_cardinal', 'to_digits'],
   mode: ['range', 'episode'],
+  nccl_p2p_level: ['NVL', 'auto', 'LOC', 'PIX', 'PXB', 'PHB', 'SYS'],
+  target_style: ['cardinals', 'digits'],
 };
 const HELP = {
   capture_backend: 'auto uses GPU-native sparse selection for linear CUDA capture; reference keeps the original CPU path',
@@ -44,6 +46,27 @@ const HELP = {
   mode: 'range = HTTP Range Ogg page windows; episode = full episode download',
   workers: 'parallel episode worker threads (1..8)',
   devices: 'Phase 1 model replicas, e.g. cuda:0, cuda:1 (empty = active device)',
+  cohort_run: 'Phase 4 established setup_scale run; empty selects latest. Training and monitoring stay recording-disjoint.',
+  target_style: 'Adapter direction: cardinals (existing default) or digits (uses accepted pairs from teacher_source_run).',
+  teacher_source_run: 'For digits: completed cardinal Phase 4 run to reuse. Same split, seed, model and filters required. No new teacher inference; naturally cardinal examples are excluded.',
+  epochs: 'Phase 4 passes over the training cohort (1–3); frozen teacher targets are generated once and reused',
+  rank: 'LoRA rank; base model remains frozen',
+  alpha: 'LoRA scale = alpha / rank',
+  target_modules: 'LoRA linear modules inside decoder layers (and optional final encoder layers)',
+  encoder_top_layers: '0 = decoder-only; 1 adds the final encoder layer',
+  gradient_accumulation: 'Accepted one-clip microbatches per optimizer update; rejected targets do not count',
+  min_rest_match: 'Minimum Phase 1 non-number agreement for suppressed targets',
+  include_natural_cardinal: 'Train on naturally spelled-out numbers even when no digit suppression is needed',
+  include_no_number: 'Include clean baseline outputs with no recognized numbers as preservation examples',
+  value_filter: 'Optional conservative integer-value parser gate; off by default so ambiguous valid targets are not discarded',
+  eval_every_steps: '0 = baseline + epoch-end evaluation only; positive adds update-interval monitoring/checkpoints',
+  bf16: 'Use bfloat16 autocast for CUDA student training; teacher/evaluation retain normal inference precision',
+  parallel: 'Parallel cached teacher generation followed by synchronized DDP training; disable for legacy one-GPU online mode',
+  global_batch_size: 'Accepted clips per global optimizer update across ALL GPUs; default 8 preserves the original effective batch',
+  checkpoint_every_steps: 'Save atomic adapter + resumable optimizer/RNG state every N updates',
+  worker_timeout_seconds: 'Bound startup/progress stalls and distributed collective waits before failing the job',
+  cpu_threads_per_worker: 'Bound PyTorch CPU threads in each spawned GPU worker',
+  nccl_p2p_level: 'NVL restricts direct NCCL P2P to NVLink pairs (verified on this A40 machine); auto uses NCCL/environment defaults',
 };
 
 const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -68,7 +91,7 @@ function testWav(chunks, frames, rate) {
 function app() {
   let mic = null; // native audio nodes must not be wrapped in Alpine proxies
   return {
-    tabs: ['overview', 'corpus', 'phase1', 'phase1.5', 'phase2', 'budget', 'phase3', 'test', 'jobs', 'knowledge'],
+    tabs: ['overview', 'corpus', 'phase1', 'phase1.5', 'phase2n', 'budget', 'phase3', 'phase4', 'test', 'jobs', 'knowledge'],
     tab: location.hash.slice(1) || 'overview',
     settings: {}, device: '', jobs: [], jobTypes: {}, cfgs: {}, OPTIONS, HELP,
     toast: '',
@@ -77,9 +100,11 @@ function app() {
     // phase 1
     p1: { run: '', rows: [], total: 0, verdicts: {}, filter: '', sel: null, usable: null },
     p15: { run: '', summary: null, unitSrc: 'model_baseline' },
-    p2: { run: '', chosen: [], summary: null, type: 'to_cardinal', cands: [], candTotal: 0, candOffset: 0, p1runs: [], verdicts: ['cardinal', 'human_good'], usable: null },
+    p2: { run: '', summary: null, type: 'to_cardinal', cands: [], candTotal: 0, candOffset: 0 },
+    p2n: { run: '', chosen: [], summary: null, p1runs: [], verdicts: ['cardinal', 'human_good'], usable: null },
     bud: { run: '', chosen: [], p1runs: [], summary: null },
     p3: { run: '', table: [], outputs: {}, sample: null },
+    p4: { run: '', monitor: null, metrics: [], evaluations: [], checkpoints: [], loading: false, error: '', starting: false, outputs: [], outputEpoch: null, outputStep: null },
     test: { source: '', spec: null, loading: false, audio: null, configs: [], nextId: 1,
             run: '', results: [], error: '', uploading: false, submitting: false,
             recording: false, seconds: 0, starting: false },
@@ -113,7 +138,7 @@ function app() {
       this.jobs = await this.api('/api/jobs');
       const active = this.jobs.filter(j => ['running', 'queued'].includes(j.status));
       // live refresh of the selected run's results
-      for (const [sel, type, fn] of [[this.p1.run, 'phase1', () => this.loadP1()], [this.p15.run, 'phase1_5', () => this.loadP15()], [this.p2.run, 'phase2', () => this.loadP2()], [this.bud.run, 'budget_sweep', () => this.loadBud()], [this.p3.run, 'phase3', () => this.loadP3()]]) {
+      for (const [sel, type, fn] of [[this.p1.run, 'phase1', () => this.loadP1()], [this.p15.run, 'phase1_5', () => this.loadP15()], [this.p2.run, 'phase2', () => this.loadP2()], [this.p2n.run, 'phase2n', () => this.loadP2n()], [this.bud.run, 'budget_sweep', () => this.loadBud()], [this.p3.run, 'phase3', () => this.loadP3()]]) {
         const j = this.jobs.find(x => x.id === sel);
         const was = prev.find(x => x.id === sel);
         if (j && (['running'].includes(j.status) || (was && was.status !== j.status))) fn();
@@ -121,6 +146,7 @@ function app() {
       const tj = this.job(this.test.run), tw = prev.find(j => j.id === this.test.run);
       if (tj && (['queued', 'running'].includes(tj.status) || !tw || tw.status !== tj.status)) await this.loadTestResults();
       if (this.logJob) this.pollLog();
+      if (this.tab === 'phase4' && this.p4.run) await this.loadP4();
       return active;
     },
     byType(t) { return this.jobs.filter(j => j.type === t); },
@@ -142,7 +168,10 @@ function app() {
 
     // ---------------- config forms
     fields(type) { return Object.keys(this.cfgs[type] || {}).filter(k => !this.hidden(type).includes(k)); },
-    hidden(type) { return { phase1: ['sample_ids'], phase2: ['phase1_runs', 'verdicts'], budget_sweep: ['phase1_runs'], phase3: ['phase2_run', 'eval_sample_ids'] }[type] || []; },
+    hidden(type) {
+      if (type === 'phase4') return this.cfgs.phase4?.parallel ? ['device', 'gradient_accumulation'] : ['devices', 'global_batch_size', 'checkpoint_every_steps', 'worker_timeout_seconds', 'cpu_threads_per_worker', 'nccl_p2p_level'];
+      return { phase1: ['sample_ids'], phase2: ['phase1_runs', 'verdicts'], phase2n: ['phase1_runs', 'verdicts', 'sample_ids'], budget_sweep: ['phase1_runs'], phase3: ['phase2_run', 'eval_sample_ids'] }[type] || [];
+    },
     kind(type, k) {
       const d = this.jobTypes[type].defaults[k], v = this.cfgs[type][k];
       if (OPTIONS[k]) return 'select';
@@ -167,13 +196,16 @@ function app() {
       if (t === 'corpus') this.loadCorpus(true);
       if (t === 'phase1') { this.loadUsable(); if (!this.p1.run) this.pickLatest('phase1'); }
       if (t === 'phase1.5') { if (!this.p15.run) this.pickLatest('phase1_5'); }
-      if (t === 'phase2') { this.initP2(); if (!this.p2.run) this.pickLatest('phase2'); }
+      if (t === 'phase2') { if (!this.p2.run) this.pickLatest('phase2'); }
+      if (t === 'phase2n') { this.initP2n(); if (!this.p2n.run) this.pickLatest('phase2n'); }
       if (t === 'budget') { this.initBud(); if (!this.bud.run) this.pickLatest('budget_sweep'); }
       if (t === 'phase3') { if (!this.p3.run) this.pickLatest('phase3'); }
+      if (t === 'phase4') { if (!this.p4.run) this.pickLatest('phase4'); else this.loadP4(); }
       if (t === 'test' && !this.test.source) {
         this.test.source = (this.job(this.p3.run)?.status === 'done' ? this.p3.run : '') || this.byType('phase3').find(j => j.status === 'done')?.id || '';
         if (this.test.source) this.loadTestSource();
       }
+      if (t === 'test' && this.test.source) this.loadTestSource();
       if (t === 'knowledge') this.loadKnowledge();
     },
     pickLatest(type) {
@@ -182,8 +214,10 @@ function app() {
       if (type === 'phase1') this.selectP1(j.id);
       if (type === 'phase1_5') this.selectP15(j.id);
       if (type === 'phase2') this.selectP2(j.id);
+      if (type === 'phase2n') this.selectP2n(j.id);
       if (type === 'budget_sweep') this.selectBud(j.id);
       if (type === 'phase3') this.selectP3(j.id);
+      if (type === 'phase4') this.selectP4(j.id);
     },
 
     // ---------------- corpus
@@ -253,21 +287,7 @@ function app() {
       try { this.p15.summary = await this.api(`/api/jobs/${id}/file/summary.json`, 'GET', null, true); } catch { this.p15.summary = null; }
     },
 
-    // ---------------- phase 2
-    initP2() {
-      this.p2.p1runs = this.byType('phase1').filter(j => j.status === 'done');
-      if (!this.p2.sel_init) { this.p2.sel_init = true; const l = this.p2.p1runs[0]; if (l) this.p2.chosen = [l.id]; }
-      this.p2.chosen = this.p2.chosen || [];
-      this.updateUsable();
-    },
-    toggleP1(id) { const c = this.p2.chosen; const i = c.indexOf(id); i < 0 ? c.push(id) : c.splice(i, 1); this.updateUsable(); },
-    async updateUsable() {
-      if (!this.p2.chosen?.length) { this.p2.usable = 0; return; }
-      const r = await this.api(`/api/phase1/usable?runs=${this.p2.chosen.join(',')}&verdicts=${this.p2.verdicts.join(',')}`);
-      this.p2.usable = r.count;
-    },
-    toggleVerdict(v) { const a = this.p2.verdicts; const i = a.indexOf(v); i < 0 ? a.push(v) : a.splice(i, 1); this.updateUsable(); },
-    launchP2() { return this.launch('phase2', { phase1_runs: this.p2.chosen, verdicts: this.p2.verdicts }); },
+    // ---------------- legacy weight-voting Phase 2 (read-only)
     selectP2(id) { this.p2.run = id; this.loadP2(); this.watchLog(id); },
     async loadP2() {
       const id = this.p2.run; if (!id) return;
@@ -300,6 +320,33 @@ function app() {
       const e = Object.entries(obj || {}).slice(0, n); const m = Math.max(1e-30, ...e.map(x => x[1]));
       return e.map(([k, v]) => ({ k, v, w: 100 * v / m }));
     },
+
+    // ---------------- component-level Phase 2N
+    initP2n() {
+      this.p2n.p1runs = this.byType('phase1').filter(j => j.status === 'done');
+      if (!this.p2n.sel_init) { this.p2n.sel_init = true; const l = this.p2n.p1runs[0]; if (l) this.p2n.chosen = [l.id]; }
+      this.p2n.chosen = this.p2n.chosen || [];
+      this.updateP2nUsable();
+    },
+    toggleP1(id) { const c = this.p2n.chosen; const i = c.indexOf(id); i < 0 ? c.push(id) : c.splice(i, 1); this.updateP2nUsable(); },
+    async updateP2nUsable() {
+      if (!this.p2n.chosen?.length) { this.p2n.usable = 0; return; }
+      const r = await this.api(`/api/phase1/usable?runs=${this.p2n.chosen.join(',')}&verdicts=${this.p2n.verdicts.join(',')}`);
+      this.p2n.usable = r.count;
+    },
+    toggleVerdict(v) { const a = this.p2n.verdicts; const i = a.indexOf(v); i < 0 ? a.push(v) : a.splice(i, 1); this.updateP2nUsable(); },
+    launchP2n() { return this.launch('phase2n', { phase1_runs: this.p2n.chosen, verdicts: this.p2n.verdicts }); },
+    selectP2n(id) { this.p2n.run = id; this.loadP2n(); this.watchLog(id); },
+    async loadP2n() {
+      const id = this.p2n.run; if (!id) return;
+      try { this.p2n.summary = await this.api(`/api/jobs/${id}/file/summary.json`, 'GET', null, true); } catch { this.p2n.summary = null; }
+    },
+    profileRows(sites) {
+      const a = (sites || []).filter(s => s.abs_mean_attr != null).sort((x, y) => y.abs_mean_attr - x.abs_mean_attr);
+      const m = Math.max(1e-30, ...a.map(s => s.abs_mean_attr));
+      return a.slice(0, 16).map(s => ({...s, w: 100 * s.abs_mean_attr / m}));
+    },
+    editsOfP2n() { return this.p2n.summary?.edits ? Object.entries(this.p2n.summary.edits).map(([id, e]) => ({id, ...e})) : []; },
 
     // ---------------- budget sweep
     initBud() {
@@ -409,12 +456,69 @@ function app() {
       if (!this.p3.sample) this.p3.sample = Object.keys(out)[0] || null;
     },
     p3base() { return this.p3.table.find(r => r.cond === 'baseline'); },
-    async launchP3() { return this.launch('phase3', { phase2_run: this.p2.run || this.byType('phase2').find(j => j.status === 'done')?.id }); },
+    p3sourceRuns() { return this.byType('phase2n').filter(j => j.status === 'done'); },
+    selectedP3Source() { return this.p2n.run || this.p3sourceRuns()[0]?.id || ''; },
+    async launchP3() {
+      const phase2_run = this.selectedP3Source();
+      if (!phase2_run) return null;
+      return this.launch('phase3', { phase2_run });
+    },
+
+    // ---------------- Phase 4 online pseudo-label LoRA training
+    async launchP4() {
+      if (this.p4.starting) return;
+      this.p4.starting = true;
+      try { const j = await this.launch('phase4'); await this.selectP4(j.id); }
+      finally { this.p4.starting = false; }
+    },
+    async selectP4(id) {
+      this.p4.run = id; this.p4.monitor = null; this.p4.metrics = [];
+      this.p4.evaluations = []; this.p4.checkpoints = []; this.p4.error = '';
+      this.p4.outputs = []; this.p4.outputEpoch = null; this.p4.outputStep = null;
+      await this.loadP4();
+    },
+    async evaluateP4(checkpoint) {
+      await this.launch('phase4_evaluate', {training_run: this.p4.run, checkpoint});
+      this.say('Adapter evaluation queued; results appear in Jobs.');
+    },
+    async showP4Outputs(epoch, step) {
+      const id = this.p4.run;
+      try {
+        const r = await this.api(`/api/jobs/${encodeURIComponent(id)}/rows?file=evaluation.jsonl&limit=1000000`, 'GET', null, true);
+        if (id !== this.p4.run) return;
+        this.p4.outputs = r.items.filter(row => row.epoch === epoch && row.step === step);
+        this.p4.outputEpoch = epoch; this.p4.outputStep = step;
+      } catch (e) { this.p4.error = String(e); }
+    },
+    async loadP4() {
+      if (!this.p4.run || this.p4.loading) return;
+      const id = this.p4.run;
+      this.p4.loading = true;
+      try {
+        const r = await this.api(`/api/phase4/${encodeURIComponent(id)}/monitor`, 'GET', null, true);
+        if (id !== this.p4.run) return;
+        Object.assign(this.p4, r, {error: ''});
+      } catch (e) { if (id === this.p4.run) this.p4.error = String(e); }
+      finally { this.p4.loading = false; }
+    },
+    p4plot(key) {
+      const rows = this.p4.metrics.filter(r => Number.isFinite(r[key]));
+      if (!rows.length) return '';
+      const lo = Math.min(...rows.map(r => r[key])), hi = Math.max(...rows.map(r => r[key]));
+      const first = rows[0].step, last = rows.at(-1).step;
+      return rows.map(r => `${8 + 584 * (r.step-first)/Math.max(1,last-first)},${142 - 130*(r[key]-lo)/Math.max(1e-9,hi-lo)}`).join(' ');
+    },
 
     // ---------------- interactive Test playground
     testBusy() {
       return this.test.starting || this.test.recording || this.test.uploading || this.test.submitting ||
         ['queued', 'running'].includes(this.job(this.test.run)?.status);
+    },
+    testSourceRuns() {
+      return this.jobs.filter(j => (j.type === 'phase3' && j.status === 'done') || j.type === 'phase4');
+    },
+    runLabel(j) {
+      return j.type === 'phase4' ? `${j.id} · → ${j.config?.target_style || 'cardinals'}` : j.id;
     },
     async loadTestSource() {
       const id = this.test.source;
@@ -425,14 +529,14 @@ function app() {
         const spec = await this.api('/api/test/runs/' + encodeURIComponent(id), 'GET', undefined, true);
         if (this.test.source !== id) return;
         this.test.spec = spec; this.test.configs = [];
-        for (const edit of spec.edits) this.addTestConfig(edit.id);
+        this.addTestConfig();
       } catch (e) { this.test.error = e.message; }
       finally { this.test.loading = false; }
     },
     addTestConfig(edit) {
       if (!this.test.spec) return;
       this.test.configs.push({id: this.test.nextId++, edit: edit || this.test.spec.edits[0].id,
-        strength: this.test.spec.strengths[0] ?? 1, label: ''});
+        strength: 1, label: ''});
     },
     async uploadTestAudio(blob, filename) {
       if (!blob) return;
@@ -489,7 +593,7 @@ function app() {
     async runTest() {
       this.test.error = ''; this.test.submitting = true;
       try {
-        if (!this.test.source || !this.test.audio) throw new Error('Choose a Phase 3 run and record or upload audio first.');
+        if (!this.test.source || !this.test.audio) throw new Error('Choose a Phase 3 or Phase 4 run and record or upload audio first.');
         if (this.test.configs.some(c => !Number.isFinite(c.strength))) throw new Error('Every strength must be a finite number.');
         const job = await this.api('/api/test/transcribe', 'POST', {phase3_run: this.test.source,
           audio_id: this.test.audio.id, edit_configs: this.test.configs.map(({edit, strength, label}) => ({edit, strength, label}))}, true);

@@ -12,11 +12,14 @@ okf_version: "0.2"
 * [Roadmap](plan/roadmap.md) - phases, status and next steps
 * [Approach v2](plan/approach-v2.md) - style spans, sequence contrast, component attribution, translation to weight edits
 * [Phase 1 - existence proof](plan/phase-1-existence-proof.md) - does the model know both forms?
-* [Phase 2 - upstream discovery](plan/phase-2-upstream-discovery.md) - find the knobs
+* [Phase 2 - legacy weight discovery](plan/phase-2-upstream-discovery.md) - deprecated; new discovery is Phase 2N in Approach v2
 * [Phase 3 - control experiments](plan/phase-3-control-experiments.md) - do the knobs steer output?
+* [Phase 4 - online LoRA training](plan/phase-4-lora.md) - independent frozen-teacher pseudo-label training, natural cardinal targets, monitoring UI and unsuppressed evaluation
 
 # Reference
 
+* [Controller validation](reference/controller-validation.md) - ten-sentence correctness checks, a shared hard 100-sentence budget, calibration/confirmation separation and exact uncertainty reporting
+* [Phase 4 parallel training](reference/phase4-parallel.md) - eight-GPU teacher cache, DDP with fixed global batch, resumable checkpoints, monitoring and A40 NCCL routing
 * [Hyperparameters](reference/hyperparameters.md) - every knob, default, and what it means
 * [Harness architecture](reference/architecture.md) - modules, jobs, data layout, CLI/API
 * [Corpus sources](reference/corpus-sources.md) - explore.ivrit.ai and the offline HF-cache source
@@ -26,6 +29,12 @@ okf_version: "0.2"
 
 # Findings
 
+* [2026-11-07 Phase 4 parallel validation](findings/2026-11-07-phase4-parallel-validation.md) - eight-rank NCCL/update checks, serial/parallel frozen-teacher equivalence and NVLink-only P2P workaround; synthetic only
+* [2026-11-07 controller establishment](findings/2026-11-07-controller-establishment.md) - bounded correctness sampling, rejected digit-only wins, balanced rediscovery and conservative integer-value filtering of contrast targets
+* [2026-11-07 microphone nudge audit](findings/2026-11-07-microphone-nudge-audit.md) - saved owner failure uses correct nudges; held-out digit share overstates correctness; head gain ×10 correctly converts the saved 1948 sentence in one bounded follow-up
+* [2026-11-07 turbo Phase 2N held-out](findings/2026-11-07-turbo-phase2n-heldout.md) - calibrated 50-clip control: decoder steering reaches 21.7% digit share at strength 0.3 with no degeneration; unit gains are gentler
+* [2026-11-07 turbo Phase 2N parity](findings/2026-11-07-turbo-phase2n-parity.md) - 200-point component attribution, six coherent edits, 190/190 discovery-only parity checks, and a steering-strength warning before held-out evaluation
+* [2026-11-07 turbo steering diagnosis](findings/2026-11-07-turbo-steering-diagnosis.md) - small/turbo method mismatch, weak sign consistency, uncalibrated final edits and candidate-count versus gradient localization
 * [2026-11-06 turbo Phase 3 results](findings/2026-11-06-turbo-phase3-results.md) - 25 conditions on 50 recording-held-out clips; modest strength-20 steering, flat controls and clean completion
 * [2026-11-06 Phase 3 throughput](findings/2026-11-06-phase3-throughput.md) - same-condition CUDA batching, fresh encoding under every edit, discovery-only parity benchmark and post-job memory cleanup
 * [2026-11-06 budget-sweep throughput](findings/2026-11-06-budget-sweep-throughput.md) - device-native replacement validated at 222M-weight endpoint (22.94 GB peak); unchanged-grid sweep restarted with per-budget checkpoints

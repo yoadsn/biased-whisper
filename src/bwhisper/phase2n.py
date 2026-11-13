@@ -53,6 +53,7 @@ PHASE2N_DEFAULTS = {
     "phase1_runs": [],
     "verdicts": ["cardinal", "human_good"],
     "max_points": 200,
+    "sample_ids": None,  # optional explicit discovery subset; filter BEFORE max_points
     "objective": "auto",
     "towers": ["decoder", "encoder"],
     "map": "full",  # full | decision : which attribution map drives selection
@@ -244,7 +245,8 @@ def run_phase2n(ctx: Ctx, cfg: dict) -> dict:
     n_units = layout[-1]["offset"] + layout[-1]["n"]
     mc = L.model.config
     heads_dim = {"decoder": mc.d_model // mc.decoder_attention_heads, "encoder": mc.d_model // mc.encoder_attention_heads}
-    pts = decision_points(cfg["phase1_runs"], cfg["verdicts"], int(cfg["max_points"]))
+    pts = decision_points(cfg["phase1_runs"], cfg["verdicts"], int(cfg["max_points"]),
+                          sample_ids=cfg.get("sample_ids"))
     if len(pts) < 3:
         raise RuntimeError("need >= 3 decision points")
     kinds = {resolve_kind(p, cfg["objective"]) for p in pts}

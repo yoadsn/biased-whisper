@@ -10,6 +10,20 @@ resource: src/bwhisper
 
 # Layout
 
+## Phase 4 adapter training
+
+Independent of discovery/edit phases: `phase4.py` registers `phase4` online
+frozen-teacher training and `phase4_evaluate` checkpoint reload/evaluation jobs.
+`lora.py` implements adapter-only safetensors and reversible module installation.
+`phase4_parallel.py` owns fingerprinted teacher caches and subprocess lifecycle;
+`phase4_worker.py` runs independent teacher replicas or torchrun/DDP students.
+All harness GPU jobs use advisory device reservations; only the parent owns a
+Job Manager and top-level monitoring/artifact writes. See
+[parallel training](/reference/phase4-parallel.md) for NCCL routing and resume.
+The Phase 4 tab polls an atomic monitor snapshot plus bounded scalar-history
+tails; no training targets are exposed by monitoring. See
+[Phase 4](/plan/phase-4-lora.md) for split protection, defaults, artifacts and limits.
+
 ```
 src/bwhisper/
   config.py        paths, settings.json, phase default hyperparameters
@@ -21,9 +35,9 @@ src/bwhisper/
   jobs.py          job registry/runner; run dir = data/runs/<id>/{job.json,log.txt,*.jsonl,...}
   phase1.py        Phase 1 (v1 first-digit rewind, v2 span mode: StyleTokens, divergence region, paired transcripts)
   phase1_5.py      co-occurrence mining around digit spans, edit patterns, satellites.json
-  phase2.py        weight-space nudges; point_objective (mass | pair | seq_contrast | auto) shared by all phases
-  phase2_capture.py device-native linear sparse selection, synchronized timings, registered CPU/GPU benchmark job
-  phase2n.py       component attribution (neurons, heads, residual), BH-FDR + voting, translation to weight edits
+  phase2.py        legacy weight-voting nudges; point_objective (mass | pair | seq_contrast | auto) shared by all phases
+  phase2_capture.py device-native legacy sparse selection, synchronized timings, registered CPU/GPU benchmark job
+  phase2n.py       default component attribution (neurons, heads, residual), BH-FDR + voting, translation to weight edits
   budget.py        budget sweep (energy, self effect, held-out transfer vs k)
   phase3.py        control experiments (applies any candidates_<type>.npz)
   phase3_device.py same-condition batched control experiments and discovery-only reference-parity benchmark

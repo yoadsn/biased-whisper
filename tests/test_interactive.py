@@ -36,6 +36,132 @@ def playground(experiment, loaded, tmp_path, monkeypatch):
     return {**T.TEST_DEFAULTS, "phase3_run": phase3.name, "audio_id": aid}, space, loads
 
 
+@pytest.fixture
+def adapter_playground(playground, loaded, tmp_path, monkeypatch):
+    from bwhisper.lora import Adapter
+    from bwhisper import audio
+
+    cfg, space, loads = playground
+    directory = tmp_path / "phase4-source"
+    directory.mkdir()
+    (directory / "job.json").write_text(json.dumps({"type": "phase4", "status": "done",
+        "config": {"model": loaded.name, "max_new_tokens": 7}}))
+    adapter = Adapter(loaded.model, rank=2, alpha=4., dropout=.05, encoder_top_layers=1)
+    try:
+        with torch.no_grad():
+            for layer in adapter.layers():
+                layer.B.fill_(.01)
+        for name in ("epoch-01", "update-step-000100", "incomplete.partial"):
+            adapter.save(directory / name, {"model": loaded.name, "format": "bwhisper-lora-v1"})
+    finally:
+        adapter.restore()
+    monkeypatch.setattr(audio, "load_audio", lambda path: np.zeros(64, dtype=np.float32))
+    return {**cfg, "phase3_run": directory.name}, space, loads
+
+
+@pytest.mark.parametrize("status", ["done", "cancelled", "failed", "running"])
+def test_adapter_sources_include_any_run_with_complete_checkpoints(adapter_playground, status):
+    cfg, _, _ = adapter_playground
+    path = T.run_dir(cfg["phase3_run"]) / "job.json"
+    job = json.loads(path.read_text())
+    job["status"] = status
+    path.write_text(json.dumps(job))
+    spec = T.source_spec(cfg["phase3_run"])
+    assert spec["kind"] == "adapter"
+    assert [e["id"] for e in spec["edits"]] == ["epoch-01", "update-step-000100"]
+    with pytest.raises(ValueError, match="trained strength"):
+        T.validated_configs(spec, [{"edit": "epoch-01", "strength": 2}])
+    with pytest.raises(ValueError, match="available edit"):
+        T.validated_configs(spec, [{"edit": "../epoch-01", "strength": 1}])
+
+
+def test_adapter_comparison_restores_base_and_repeats_independently(adapter_playground, loaded, tmp_path, monkeypatch):
+    cfg, space, loads = adapter_playground
+    cfg["edit_configs"] = [{"edit": name, "strength": 1} for name in
+                           ["epoch-01", "update-step-000100", "epoch-01"]]
+    before = space.snapshot()
+    original_modules = dict(loaded.model.named_modules())
+    result = T.transcribe(Context(tmp_path / "adapter-test"), cfg)
+    assert len(loads) == 1
+    assert len(result["results"]) == 4
+    assert result["results"][0]["edit"] is None
+    assert result["results"][1]["text"] == result["results"][2]["text"] == result["results"][3]["text"]
+    assert not result["suppression_at_evaluation"]
+    assert all(torch.equal(a, b) for a, b in zip(before, space.params))
+    assert dict(loaded.model.named_modules()) == original_modules
+    assert not loaded.model.training
+
+
+def test_adapter_api_accepts_generic_source_and_queues_without_loading(adapter_playground, monkeypatch):
+    from bwhisper import api
+    cfg, _, loads = adapter_playground
+    submitted = []
+    def submit(kind, config):
+        submitted.append((kind, config))
+        return SimpleNamespace(to_dict=lambda: {"id": "queued-adapter-test"})
+    monkeypatch.setattr(api, "manager", lambda: SimpleNamespace(submit=submit))
+    with TestClient(api.app) as client:
+        spec = client.get(f"/api/test/runs/{cfg['phase3_run']}")
+        assert spec.status_code == 200
+        assert spec.json()["kind"] == "adapter"
+        response = client.post("/api/test/transcribe", json={"source_run": cfg["phase3_run"],
+            "audio_id": cfg["audio_id"], "edit_configs": [{"edit": "epoch-01", "strength": 1}]})
+        assert response.status_code == 200
+    assert submitted[0][0] == "test_transcribe"
+    assert submitted[0][1]["phase3_run"] == cfg["phase3_run"]
+    assert not loads
+
+
+def test_adapter_source_rejects_wrong_base_provenance(adapter_playground):
+    cfg, _, _ = adapter_playground
+    directory = T.run_dir(cfg["phase3_run"])
+    for path in directory.glob("*/adapter.json"):
+        metadata = json.loads(path.read_text())
+        metadata["model"] = "different-base"
+        path.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="no complete saved adapters"):
+        T.source_spec(cfg["phase3_run"])
+
+
+def test_adapter_direction_is_visible_and_verified(adapter_playground):
+    cfg, _, _ = adapter_playground
+    directory = T.run_dir(cfg["phase3_run"])
+    assert T.source_spec(cfg["phase3_run"])["target_style"] == "cardinals"
+    job = json.loads((directory / "job.json").read_text())
+    job["config"]["target_style"] = "digits"
+    (directory / "job.json").write_text(json.dumps(job))
+    with pytest.raises(ValueError, match="direction mismatch"):
+        T.source_spec(cfg["phase3_run"])
+    for path in directory.glob("*/adapter.json"):
+        metadata = json.loads(path.read_text())
+        metadata["target_style"] = "digits"
+        path.write_text(json.dumps(metadata))
+    spec = T.source_spec(cfg["phase3_run"])
+    assert spec["target_style"] == "digits"
+    assert spec["stat"] == "LoRA → digits"
+    rows = T.validated_configs(spec, [{"edit": "epoch-01", "strength": 1}])
+    assert "→ digits" in rows[0]["label"]
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, Cancelled])
+def test_adapter_failure_restores_cached_base(adapter_playground, loaded, tmp_path, monkeypatch, failure):
+    cfg, _, _ = adapter_playground
+    cfg["edit_configs"] = [{"edit": "epoch-01", "strength": 1}]
+    modules = dict(loaded.model.named_modules())
+    original = M.transcribe
+    calls = []
+    def fail(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise failure("fixture adapter decode failure")
+        return original(*args, **kwargs)
+    monkeypatch.setattr(M, "transcribe", fail)
+    with pytest.raises(failure):
+        T.transcribe(Context(tmp_path / "adapter-failure"), cfg)
+    assert dict(loaded.model.named_modules()) == modules
+    assert not loaded.model.training
+
+
 def test_configs_are_independent_and_one_model_serves_every_row(playground, loaded, tmp_path, monkeypatch):
     cfg, space, loads = playground
     cfg["edit_configs"] = [{"edit": "to_cardinal", "strength": value} for value in [2, -1, 0, 2]]

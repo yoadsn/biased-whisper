@@ -56,7 +56,7 @@
       <h3>Pipeline state</h3>
       <div class="kv">
         <span>corpus</span><span><b x-text="corpus.stats.total"></b> samples <a href="#corpus" @click="tab='corpus'">→</a></span>
-        <template x-for="p in ['phase1','phase2','phase3']" :key="p">
+        <template x-for="p in ['phase1','phase2n','phase3','phase4']" :key="p">
           <template x-if="true">
             <span style="display:contents">
               <span x-text="p"></span>
@@ -509,32 +509,162 @@
   </div>
 </section>
 
-<!-- ======================= PHASE 2 ======================= -->
-<section x-show="tab==='phase2'">
-  <h2>Phase 2 — discover upstream knobs</h2>
-  <p class="muted small">For each verified decision point: nudge the digit-vs-cardinal log-odds to the target probability, keep the top-% of the nudge, take the commonly selected params, then vote across random groups and keep what survives a permutation-null FDR threshold.</p>
+<!-- ======================= PHASE 4 ======================= -->
+<section x-show="tab==='phase4'">
+  <h2>Phase 4 — parallel teacher → LoRA</h2>
+  <p class="muted small">Independent training path; no Phase 2N or 3 required. Independent frozen teachers prepare a reusable target cache, then DDP trains the adapter without digit suppression. Natural cardinal and no-number examples can preserve existing behavior.</p>
+  <div class="card">
+    <h3>Training configuration</h3>
+    <p class="small muted">Parallel defaults: 8 GPUs, global batch 8 (one clip per GPU per update). On 4 GPUs the same batch uses accumulation 2. Decoder layers by default; encoder_top_layers optionally adds only the final encoder layers. cohort_run empty = latest established setup_scale split. Epochs must be 1–3. Disable parallel for the original one-GPU online path.</p>
+    <p class="small muted">Completed compatible teacher targets are reused automatically. resume_run resumes an inactive parallel run's latest optimizer/adapter/RNG checkpoint; world size, accepted data and training settings must match. An old single-GPU run cannot be resumed as DDP; its files are preserved.</p>
+    <div class="cfg" data-cfg="phase4"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn" @click="launchP4()" :disabled="p4.starting || byType('phase4').some(j=>['queued','running'].includes(j.status))">Start Phase 4 training</button>
+      <span class="muted small">This starts real training. Nothing launches automatically.</span>
+    </div>
+  </div>
+  <div class="card">
+    <div class="row">
+      <select x-model="p4.run" @change="selectP4(p4.run)"><option value="">select training run</option><template x-for="j in byType('phase4')" :key="j.id"><option :value="j.id" x-text="runLabel(j)+' ['+j.status+']'"></option></template></select>
+      <template x-if="job(p4.run)"><span class="pill" :class="job(p4.run).status" x-text="job(p4.run).status"></span></template>
+      <button class="btn sec" :disabled="!p4.run" @click="watchLog(p4.run)">View log</button>
+      <button class="btn bad" :disabled="!['running','queued'].includes(job(p4.run)?.status)" @click="cancel(p4.run)">Cancel safely</button>
+      <span class="progress"><div :style="'width:'+pct(job(p4.run))+'%'"></div></span>
+    </div>
+    <p class="note" x-show="job(p4.run)?.error || p4.error" x-text="job(p4.run)?.error || p4.error"></p>
+    <p class="muted small" x-show="!p4.run">No training run selected.</p>
+    <template x-if="p4.monitor"><div>
+      <p><b x-text="'Adapter direction: → '+(p4.monitor.target_style || job(p4.run)?.config?.target_style || 'cardinals')"></b></p>
+      <p class="note" x-show="p4.monitor.stage==='deriving_digit_targets'" x-text="'Reusing cached pairs for digit targets: '+(p4.monitor.derived_samples||0)+' / '+p4.monitor.train_samples+' outcomes processed; no teacher inference.'"></p>
+      <p class="note" x-show="p4.monitor.stage==='fingerprinting'">Preparing reusable teacher cache: hashing checkpoint and audio files on CPU before GPU workers start. <strong x-text="(p4.monitor.fingerprinted_samples||0).toLocaleString()+' / '+((p4.monitor.train_samples||0)+(p4.monitor.eval_samples||0)).toLocaleString()+' samples fingerprinted'"></strong>. Training counters remain zero during preparation.</p>
+      <p class="small muted" x-show="p4.monitor.stage==='teacher_generation'">Generating frozen-teacher targets before student training. Workers first load the model; epoch, update and loss stay empty until teacher generation completes.</p>
+      <div class="p4-stats">
+        <div><span class="muted small">Stage</span><strong x-text="p4.monitor.stage"></strong></div>
+        <div><span class="muted small">Epoch / update</span><strong x-text="p4.monitor.epoch+' / '+p4.monitor.step"></strong></div>
+        <div><span class="muted small">Seen / accepted presentations</span><strong x-text="p4.monitor.seen+' / '+p4.monitor.accepted_presentations"></strong></div>
+        <div><span class="muted small">Latest training loss</span><strong x-text="f(p4.monitor.loss,4)"></strong></div>
+        <div><span class="muted small">Trainable parameters</span><strong x-text="p4.monitor.trainable_parameters.toLocaleString()"></strong></div>
+        <div><span class="muted small">Elapsed (minutes)</span><strong x-text="f(p4.monitor.elapsed_seconds/60,1)"></strong></div>
+      </div>
+      <p class="small muted" x-text="job(p4.run)?.message"></p>
+      <template x-if="p4.monitor.world_size"><div>
+        <div class="p4-stats">
+          <div><span class="muted small">GPUs / global batch</span><strong x-text="p4.monitor.world_size+' / '+p4.monitor.global_batch_size"></strong></div>
+          <div><span class="muted small">Cache hits / to generate</span><strong x-text="(p4.monitor.cache_hits||0)+' / '+(p4.monitor.cache_misses||0)"></strong></div>
+          <div><span class="muted small">Teacher clips / second</span><strong x-text="f(p4.monitor.teacher_clips_per_second,2)"></strong></div>
+          <div><span class="muted small">Accepted targets / second</span><strong x-text="f(p4.monitor.accepted_targets_per_second,2)"></strong></div>
+          <div><span class="muted small">Student clips / second</span><strong x-text="f(p4.monitor.student_clips_per_second,2)"></strong></div>
+          <div><span class="muted small">Updates / second</span><strong x-text="f(p4.monitor.updates_per_second,2)"></strong></div>
+          <div><span class="muted small">Accepted target cache</span><strong x-text="p4.monitor.accepted_targets ?? 'preparing'"></strong></div>
+        </div>
+        <div class="scroll"><table><thead><tr><th>Rank / device</th><th>Stage</th><th>Completed</th><th>Current / peak (GiB)</th><th>Heartbeat age (s)</th><th>Error</th></tr></thead><tbody>
+          <template x-for="r in (p4.monitor.workers||[])" :key="r.rank"><tr><td x-text="r.rank+' / '+r.device"></td><td x-text="r.stage"></td><td x-text="r.done"></td><td x-text="f((r.memory_bytes||0)/1073741824,2)+' / '+f((r.peak_memory_bytes||0)/1073741824,2)"></td><td x-text="f(Math.max(0,Date.now()/1000-r.heartbeat),1)"></td><td x-text="r.error||'—'"></td></tr></template>
+        </tbody></table></div>
+      </div></template>
+      <div class="grid p4-charts">
+        <div><h3>Training loss · last 500 updates</h3><svg viewBox="0 0 600 155" role="img" aria-label="Training loss by optimizer update"><polyline :points="p4plot('loss')" fill="none" stroke="var(--accent)" stroke-width="2"/></svg><p class="small muted">Full-target cross entropy; lower is better. Parallel: global mean across valid clips in each update. Legacy serial: latest microbatch.</p></div>
+        <div><h3>Learning rate</h3><svg viewBox="0 0 600 155" role="img" aria-label="Learning rate by optimizer update"><polyline :points="p4plot('learning_rate')" fill="none" stroke="var(--c2)" stroke-width="2"/></svg><p class="small muted">Linear warmup, then constant.</p></div>
+      </div>
+      <h3>Unique teacher examples — accepted / filter reasons</h3>
+      <div class="row"><template x-for="[reason,n] in Object.entries(p4.monitor.counts||{})" :key="reason"><span class="pill" x-text="reason+': '+n"></span></template></div>
+    </div></template>
+  </div>
+  <div class="card">
+    <h3>Recording-held-out monitoring · no inference-time digit suppression</h3>
+    <p class="note">Digit prevalence measures style, not number-value accuracy. Monitor clips are reused across epochs, not an untouched final confirmation test. Existing controller confirmation recordings are excluded. Correctness review remains a separate sampled activity; the assistant's cumulative spend is 50/100 sentences.</p>
+    <div class="scroll"><table><thead><tr><th>Epoch / update</th><th>n</th><th>Base clips with digits</th><th>Adapter clips with digits</th><th>Digit mention share</th><th>Loops / truncated / empty</th><th>Transcripts</th></tr></thead><tbody>
+      <template x-for="(r,i) in p4.evaluations" :key="i"><tr><td x-text="r.epoch+' / '+r.step"></td><td x-text="r.adapter.n"></td><td x-text="pct1(r.baseline.digit_clip_rate)"></td><td x-text="pct1(r.adapter.digit_clip_rate)"></td><td x-text="pct1(r.adapter.digit_mention_share)"></td><td x-text="r.adapter.degenerate+' / '+r.adapter.truncated+' / '+r.adapter.empty"></td><td><button class="btn sec small" @click="showP4Outputs(r.epoch,r.step)">View base vs adapter</button></td></tr></template>
+    </tbody></table></div>
+    <p class="muted small" x-show="!p4.evaluations.length">Metrics appear after the baseline pass, then each epoch (and optional update interval).</p>
+    <template x-if="p4.outputStep!==null"><div>
+      <h3 x-text="'Monitoring transcripts · epoch '+p4.outputEpoch+' / update '+p4.outputStep+' · '+p4.outputs.length+' clips'"></h3>
+      <p class="small muted">Saved outputs, not a new evaluation. Listen to check number values and missing/changed content; a digit-free result is not necessarily correct.</p>
+      <template x-for="r in p4.outputs" :key="r.sample_id"><article class="test-result">
+        <div class="row"><b x-text="'Sample #'+r.sample_id"></b><audio controls preload="none" :src="'/api/corpus/'+r.sample_id+'/audio'"></audio></div>
+        <div class="grid p4-output-pair"><div><b>Base model</b><p class="rtl" x-text="r.baseline" style="white-space:pre-wrap"></p></div><div><b>Adapter</b><p class="rtl" x-text="r.text" style="white-space:pre-wrap"></p><p class="small note" x-show="!r.ended">Token limit reached.</p></div></div>
+      </article></template>
+      <p class="small muted" x-show="!p4.outputs.length">No saved transcripts for this evaluation yet.</p>
+    </div></template>
+    <h3>Saved adapters</h3>
+    <div class="row"><template x-for="(c,i) in p4.checkpoints" :key="i"><span class="row"><span class="mono pill" x-text="c.path+' · update '+c.step"></span><button class="btn sec small" :disabled="['running','queued'].includes(job(p4.run)?.status)" @click="evaluateP4(c.path)">Reload &amp; evaluate</button></span></template></div>
+    <p class="small muted">Adapter-only safetensors + configuration under the run folder. Parallel checkpoints also save optimizer, sampler cursor and per-rank RNG state; resume.json identifies the latest complete checkpoint. Cancellation preserves compatible teacher cache entries and checkpoints. Legacy serial checkpoints remain inference-only.</p>
+  </div>
+</section>
+
+<!-- ======================= PHASE 2N ======================= -->
+<section x-show="tab==='phase2n'">
+  <h2>Phase 2N — component-level style units</h2>
+  <p class="muted small">Current discovery path. For each verified decision point, gradient × activation attributes the digit-vs-cardinal span to MLP neurons, attention heads and residual directions. Significance gates the units; effect size ranks them. Selected units become coherent output-gain edits for Phase 3.</p>
   <div class="card">
     <h3>1 · decision points</h3>
     <div class="row">
-      <template x-for="j in p2.p1runs" :key="j.id">
-        <label class="chk"><input type="checkbox" :checked="p2.chosen.includes(j.id)" @change="toggleP1(j.id)"><span class="mono" x-text="j.id"></span><span class="small muted" x-text="j.summary ? JSON.stringify(j.summary.verdicts) : ''"></span></label>
+      <template x-for="j in p2n.p1runs" :key="j.id">
+        <label class="chk"><input type="checkbox" :checked="p2n.chosen.includes(j.id)" @change="toggleP1(j.id)"><span class="mono" x-text="j.id"></span><span class="small muted" x-text="j.summary ? JSON.stringify(j.summary.verdicts) : ''"></span></label>
       </template>
-      <span class="muted small" x-show="!p2.p1runs.length">no finished phase 1 runs</span>
+      <span class="muted small" x-show="!p2n.p1runs.length">no finished phase 1 runs</span>
     </div>
     <div class="row" style="margin-top:6px"><span class="small muted">accept verdicts:</span>
-      <template x-for="v in ['cardinal','partial','human_good','no_number_words']" :key="v"><label class="chk"><input type="checkbox" :checked="p2.verdicts.includes(v)" @change="toggleVerdict(v)"><span x-text="v"></span></label></template>
-      <b x-text="'→ '+(p2.usable??'…')+' usable decision points'"></b>
+      <template x-for="v in ['cardinal','partial','human_good','no_number_words']" :key="v"><label class="chk"><input type="checkbox" :checked="p2n.verdicts.includes(v)" @change="toggleVerdict(v)"><span x-text="v"></span></label></template>
+      <b x-text="'→ '+(p2n.usable??'…')+' usable decision points'"></b>
     </div>
     <h3>2 · hyperparameters</h3>
-    <div class="cfg" data-cfg="phase2"></div>
+    <div class="cfg" data-cfg="phase2n"></div>
     <div class="row" style="margin-top:8px">
-      <button class="btn" :disabled="!p2.usable" @click="launchP2().then(j=>selectP2(j.id))">Run phase 2</button>
-      <button class="btn sec" :disabled="!p2.usable" @click="launch('phase2_benchmark', {...parseCfg('phase2'), phase1_runs:p2.chosen, verdicts:p2.verdicts, benchmark_points:2})">Benchmark GPU capture (2 points)</button>
-      <button class="btn sec" @click="cfgs.phase2.model=settings.model_smoke;cfgs.phase2.rounds=300">smoke preset</button>
+      <button class="btn" :disabled="!p2n.usable" @click="launchP2n().then(j=>selectP2n(j.id))">Run phase 2N</button>
+      <button class="btn sec" @click="cfgs.phase2n.model=settings.model_smoke;cfgs.phase2n.max_points=24;cfgs.phase2n.vote_rounds=100">smoke preset</button>
     </div>
   </div>
 
   <div class="card">
+    <div class="row">
+      <b>Run</b>
+      <select x-model="p2n.run" @change="selectP2n(p2n.run)"><option value="">—</option>
+        <template x-for="j in byType('phase2n')" :key="j.id"><option :value="j.id" x-text="j.id+' ['+j.status+']'"></option></template></select>
+      <template x-if="job(p2n.run)"><span class="row">
+        <span class="pill" :class="job(p2n.run).status" x-text="job(p2n.run).status"></span>
+        <span class="progress"><div :style="'width:'+pct(job(p2n.run))+'%'"></div></span>
+        <span class="small muted" x-text="job(p2n.run).message"></span>
+        <button class="btn sec" x-show="job(p2n.run).status==='running'" @click="cancel(p2n.run)">cancel</button></span></template>
+    </div>
+    <template x-if="job(p2n.run)&&job(p2n.run).error"><p class="note" x-text="job(p2n.run).error"></p></template>
+
+    <template x-if="p2n.summary">
+      <div>
+        <div class="grid g3" style="margin:10px 0">
+          <div class="card kv">
+            <span>decision points / units</span><span x-text="p2n.summary.points+' / '+p2n.summary.units.toLocaleString()"></span>
+            <span>mean objective</span><span x-text="f(p2n.summary.d0_mean,3)"></span>
+            <span>significant units</span><b x-text="p2n.summary.significant_units.toLocaleString()"></b>
+          </div>
+          <div class="card kv">
+            <span>vote threshold / FDR</span><span x-text="(p2n.summary.vote_threshold??'none')+' / '+f(p2n.summary.vote_fdr,3)"></span>
+            <span>vote candidates</span><span x-text="(p2n.summary.vote_candidates||0).toLocaleString()"></span>
+            <span>steering layer</span><span x-text="p2n.summary.steer ? p2n.summary.steer.best_layer : 'none'"></span>
+          </div>
+          <div class="card kv">
+            <template x-for="e in editsOfP2n()" :key="e.id">
+              <span style="display:contents"><span x-text="e.id"></span><span x-text="(e.units?e.units+' units / ':'')+(e.params||0).toLocaleString()+' params'"></span></span>
+            </template>
+          </div>
+        </div>
+        <h3>attribution profile</h3>
+        <div class="grid g2">
+          <template x-for="s in profileRows(p2n.summary.profile)" :key="s.name">
+            <div class="barrow"><span x-text="s.name"></span><div><div class="bar" :style="'width:'+s.w+'%'"></div></div><span x-text="s.abs_mean_attr.toExponential(2)"></span><span class="small muted" x-text="s.n_significant+' sig / '+s.n"></span></div>
+          </template>
+        </div>
+        <h3>top units</h3>
+        <div class="scroll"><table class="mono"><thead><tr><th>site</th><th class="num">index</th><th class="num">mean</th><th class="num">std</th><th class="num">t</th><th class="num">sign cons.</th><th class="num">votes/null</th></tr></thead>
+          <tbody><template x-for="u in (p2n.summary.top_units||[]).slice(0,80)" :key="u.unit"><tr>
+            <td x-text="u.site"></td><td class="num" x-text="u.index"></td><td class="num" x-text="u.mean.toExponential(2)"></td><td class="num" x-text="u.std.toExponential(2)"></td>
+            <td class="num" x-text="f(u.t,2)"></td><td class="num" x-text="f(u.sign_consistency,2)"></td><td class="num" x-text="u.votes+' / '+u.null_votes"></td></tr></template></tbody></table></div>
+      </div>
+    </template>
+  </div>
+
+  <details class="card">
+    <summary>Legacy weight-voting Phase 2 runs (read-only)</summary>
+    <p class="muted small">Abandoned: individual-weight voting is retained only to inspect old artifacts. New discovery and Phase 3 sources use Phase 2N above.</p>
     <div class="row">
       <b>Run</b>
       <select x-model="p2.run" @change="selectP2(p2.run)"><option value="">—</option>
@@ -546,12 +676,11 @@
         <button class="btn sec" x-show="job(p2.run).status==='running'" @click="cancel(p2.run)">cancel</button></span></template>
     </div>
     <template x-if="job(p2.run)&&job(p2.run).error"><p class="note" x-text="job(p2.run).error"></p></template>
-
     <template x-if="p2.summary">
       <div>
         <div class="row" style="margin-top:10px">
           <template x-for="t in ['to_digits','to_cardinal']" :key="t"><button class="btn sec" :style="p2.type===t?'outline:2px solid var(--accent)':''" @click="p2.type=t;p2.candOffset=0;loadCands()" x-text="t"></button></template>
-          <span class="small muted" x-text="'decision points: '+p2.summary.decision_points+' · knobs: '+p2.summary.knobs.toLocaleString()+' · cohort sizes '+JSON.stringify(p2.summary.cohort_sizes)"></span>
+          <span class="small muted" x-text="'decision points: '+p2.summary.decision_points+' · knobs: '+p2.summary.knobs.toLocaleString()"></span>
         </div>
         <template x-if="ty()&&ty().skipped"><p class="note" x-text="ty().skipped"></p></template>
         <template x-if="ty()&&!ty().skipped">
@@ -566,24 +695,11 @@
               <div class="card kv">
                 <span>gini real / null</span><span x-text="f(ty().concentration.gini)+' / '+f(ty().concentration_null.gini)"></span>
                 <span>top-1% vote share</span><span x-text="pct1(ty().concentration.top1_share)+' (null '+pct1(ty().concentration_null.top1_share)+')'"></span>
-                <span>top-10% vote share</span><span x-text="pct1(ty().concentration.top10_share)+' (null '+pct1(ty().concentration_null.top10_share)+')'"></span>
                 <span>split-half Jaccard@1%</span><span x-text="f(ty().split_half_jaccard_top1pct,2)+' (stability)'"></span>
               </div>
               <div class="card">
                 <div class="small muted">vote distribution (log height): <span style="color:var(--c1)">■ real</span> <span style="color:var(--c2)">■ null</span></div>
                 <div x-html="histSvg(ty())"></div>
-              </div>
-            </div>
-            <div class="grid g2">
-              <div><h3>gradient energy share by tower</h3>
-                <template x-for="b in barList(ty().gradient_energy_by_tower)"><div class="barrow"><span x-text="b.k"></span><div><div class="bar" :style="'width:'+b.w+'%'"></div></div><span x-text="pct1(b.v)"></span></div></template>
-                <h3>candidates by tower</h3>
-                <template x-for="b in barList(ty().candidates_by_tower)"><div class="barrow"><span x-text="b.k"></span><div><div class="bar c2" :style="'width:'+b.w+'%'"></div></div><span x-text="b.v"></span></div></template>
-              </div>
-              <div><h3>top gradient-energy groups</h3>
-                <template x-for="b in barList(ty().gradient_energy_by_group,10)"><div class="barrow"><span x-text="b.k"></span><div><div class="bar" :style="'width:'+b.w+'%'"></div></div><span x-text="pct1(b.v)"></span></div></template>
-                <h3>top candidate groups</h3>
-                <template x-for="b in barList(ty().candidates_by_group,10)"><div class="barrow"><span x-text="b.k"></span><div><div class="bar c2" :style="'width:'+b.w+'%'"></div></div><span x-text="b.v"></span></div></template>
               </div>
             </div>
             <h3>candidate knobs (module + index)</h3>
@@ -599,7 +715,7 @@
         </template>
       </div>
     </template>
-  </div>
+  </details>
 </section>
 
 <!-- ======================= BUDGET ======================= -->
@@ -712,12 +828,12 @@
   <h2>Phase 3 — do the knobs steer the output?</h2>
   <p class="muted small">Applies <code>strength × statistic</code> of the candidate nudge to the weights and decodes held-out utterances. Each condition has a control with the same params and the same magnitudes but shuffled values (or random params). <b>probe p(digit)</b> is measured at the phase-2 decision points (in-sample); the digit share is on held-out audio.</p>
   <div class="card">
-    <div class="row"><b>phase 2 run</b>
-      <select x-model="p2.run"><option value="">latest done</option><template x-for="j in byType('phase2').filter(x=>x.status==='done')" :key="j.id"><option :value="j.id" x-text="j.id"></option></template></select></div>
+    <div class="row"><b>Phase 2N source</b>
+      <select x-model="p2n.run"><option value="">latest done</option><template x-for="j in p3sourceRuns()" :key="j.id"><option :value="j.id" x-text="j.id"></option></template></select></div>
     <div class="cfg" data-cfg="phase3" style="margin-top:8px"></div>
     <div class="row" style="margin-top:8px">
-      <button class="btn" @click="launchP3().then(j=>selectP3(j.id))">Run phase 3</button>
-      <button class="btn sec" @click="launch('phase3_benchmark', {...parseCfg('phase3'), phase2_run:p2.run || byType('phase2').find(j=>j.status==='done')?.id, strengths:[2], benchmark_samples:8, benchmark_batch_sizes:[1,4,8]})">Benchmark GPU (discovery only)</button>
+      <button class="btn" :disabled="!selectedP3Source()" @click="launchP3().then(j=>j&&selectP3(j.id))">Run phase 3</button>
+      <button class="btn sec" :disabled="!selectedP3Source()" @click="launch('phase3_benchmark', {...parseCfg('phase3'), phase2_run:selectedP3Source(), strengths:[2], benchmark_samples:8, benchmark_batch_sizes:[1,4,8]}).then(j=>j&&watchLog(j.id))">Benchmark GPU (discovery only)</button>
     </div>
   </div>
   <div class="card">
@@ -751,20 +867,20 @@
 
 <!-- ======================= TEST ======================= -->
 <section x-show="tab==='test'">
-  <h2>Test <span class="small muted">One audio sample. Base model + your edits.</span></h2>
+  <h2>Test <span class="small muted">One audio sample. Base model + edits or saved adapters.</span></h2>
   <div class="card">
-    <label class="f">Completed Phase 3 run
-      <select aria-label="Test Phase 3 run" x-model="test.source" @change="loadTestSource()" :disabled="testBusy()">
+    <label class="f">Phase 3 edits or Phase 4 adapters (any run with saved checkpoints)
+      <select aria-label="Test source run" x-model="test.source" @change="loadTestSource()" :disabled="testBusy()">
         <option value="">Choose a run…</option>
-        <template x-for="j in byType('phase3').filter(j=>j.status==='done')" :key="j.id"><option :value="j.id" x-text="j.id"></option></template>
+        <template x-for="j in testSourceRuns()" :key="j.id"><option :value="j.id" x-text="runLabel(j)+' ['+j.status+']'"></option></template>
       </select>
     </label>
-    <p class="muted small" x-show="!byType('phase3').some(j=>j.status==='done')">A completed Phase 3 run is needed. Running experiments are listed in Jobs.</p>
+    <p class="muted small" x-show="!testSourceRuns().length">Choose a completed Phase 3 run or a Phase 4 run with a saved adapter.</p>
     <p class="muted small" x-show="test.loading">Loading edit definitions…</p>
     <template x-if="test.spec"><div class="test-model small">
       <span class="mono" x-text="test.spec.model"></span>
       <span class="pill" x-text="test.spec.stat"></span>
-      <span class="muted" x-text="test.spec.edits.map(e=>e.id+': '+e.params.toLocaleString()+' weights').join(' · ')"></span>
+      <span class="muted" x-text="test.spec.kind==='adapter' ? test.spec.edits.length+' saved checkpoints · trained strength 1' : test.spec.edits.map(e=>e.id+': '+e.params.toLocaleString()+' weights').join(' · ')"></span>
     </div></template>
     <p class="muted small">CUDA when available. One model is loaded on the first test and kept cached for the next; no model copies per config. Scientific jobs may clear idle caches.</p>
   </div>
@@ -790,20 +906,21 @@
     </div>
 
     <div class="card">
-      <h3>2 · Edit configs</h3>
+      <h3 x-text="test.spec?.kind==='adapter' ? '2 · Adapter checkpoints' : '2 · Edit configs'"></h3>
       <div class="test-base"><b>Base model (untouched)</b><span class="small muted">Always included</span></div>
       <template x-for="(c,i) in test.configs" :key="c.id"><div class="test-edit">
         <label class="f">Edit
           <select :aria-label="'Edit '+(i+1)" x-model="c.edit" :disabled="testBusy()"><template x-for="e in (test.spec?.edits||[])" :key="e.id"><option :value="e.id" :selected="e.id===c.edit" x-text="e.id"></option></template></select>
         </label>
-        <label class="f">Strength ×
+        <label class="f" x-show="test.spec?.kind!=='adapter'">Strength ×
           <input :aria-label="'Strength '+(i+1)" type="number" step="any" x-model.number="c.strength" :disabled="testBusy()">
         </label>
         <label class="f test-config-label">Label (optional)<input :aria-label="'Config label '+(i+1)" type="text" x-model="c.label" :disabled="testBusy()" placeholder="e.g. cardinal, gentle"></label>
         <button class="btn sec" :aria-label="'Remove config '+(i+1)" @click="test.configs=test.configs.filter(x=>x.id!==c.id)" :disabled="testBusy()">Remove</button>
       </div></template>
       <button class="btn sec" @click="addTestConfig()" :disabled="!test.spec || testBusy()" style="margin-top:10px">+ Add config</button>
-      <p class="small muted">Each row is an independent edit, not cumulative. Amount = strength × the selected run’s candidate statistic. Zero leaves weights unchanged; negative strengths reverse an edit. Large amounts can degrade transcription.</p>
+      <p class="small muted" x-show="test.spec?.kind!=='adapter'">Each row is an independent edit, not cumulative. Amount = strength × the selected run’s candidate statistic. Zero leaves weights unchanged; negative strengths reverse an edit. Large amounts can degrade transcription.</p>
+      <p class="small muted" x-show="test.spec?.kind==='adapter'" x-text="'Direction: → '+test.spec?.target_style+'. Select any complete checkpoint from this run. Each is loaded independently at trained strength, without digit suppression. The untouched base is always included.'"></p>
       <p class="small muted">Only audio features are reused. Encoder outputs are recomputed after each edit, then the exact original weights are restored before the next config.</p>
     </div>
   </div>
@@ -820,7 +937,7 @@
     <p class="note" role="alert" x-show="test.error" x-text="test.error"></p>
     <div class="test-results" x-show="test.results.length">
       <template x-for="r in test.results" :key="r.index"><article class="test-result" :class="{'test-result-base':r.edit===null}">
-        <div class="row"><b x-text="r.label"></b><span class="pill" x-show="r.edit!==null" x-text="'× '+r.strength"></span>
+        <div class="row"><b x-text="r.label"></b><span class="pill" x-show="r.edit!==null" x-text="r.kind==='adapter' ? '→ '+r.target_style : '× '+r.strength"></span>
           <span class="small muted" x-text="f(r.timings.encoder_s+r.timings.decoder_s,2)+' s inference'"></span>
         </div>
         <p class="rtl" x-text="r.text || '(no text)'" style="white-space:pre-wrap"></p>
@@ -836,7 +953,7 @@
   <div class="card">
     <table><thead><tr><th>id</th><th>status</th><th>progress</th><th>time</th><th>summary / error</th><th></th></tr></thead>
       <tbody><template x-for="j in jobs" :key="j.id"><tr>
-        <td class="mono" x-text="j.id"></td><td><span class="pill" :class="j.status" x-text="j.status"></span></td>
+        <td class="mono" x-text="runLabel(j)"></td><td><span class="pill" :class="j.status" x-text="j.status"></span></td>
         <td><span class="progress" style="display:inline-block"><div :style="'width:'+pct(j)+'%'"></div></span> <span class="small muted" x-text="j.progress.done+'/'+j.progress.total"></span></td>
         <td class="small" x-text="fmtTime(j.created)+' '+dur(j)"></td>
         <td class="small mono" x-text="j.error || JSON.stringify(j.summary||{}).slice(0,160)"></td>

@@ -32,8 +32,14 @@ model caches by default after local tensors have gone out of scope.
 5. Metrics per condition: digit share of number *mentions*, share of outputs containing digits, degenerate rate, `text_drift`
    (change in non-number words vs baseline), and an in-sample probe of mean p(digit) at the Phase 2 decision points.
 
-`strength = 1` means the average per-sample min-norm nudge restricted to the candidate set; because a subset delivers only part of the
-intended change, useful strengths are > 1.
+For legacy weight-voting candidates, `strength = 1` means the average per-sample
+min-norm nudge restricted to the candidate set. This interpretation does not
+apply to component edits: Phase 2N unit gains at 1 are normally a 10% gain
+change, whereas residual steering has a separate calibration and can degenerate
+at 1. Never use one strength recommendation for all edit families.
+
+The owner-authorized reliable-controller effort uses [bounded manual sampling](/reference/controller-validation.md)
+to check numeric meaning and sentence preservation, not digit share alone.
 
 # Read the table like this
 

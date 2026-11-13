@@ -40,7 +40,8 @@ def prepare(ctx, cfg, benchmark=False):
     space = ParamSpace(L.model, p2cfg["param_filter"], p2cfg["include_regex"], p2cfg["exclude_regex"])
     if json.loads((p2dir / "space.json").read_text())["signature"] != space.signature:
         raise RuntimeError("parameter space signature mismatch: phase-2 candidates were computed on a different model/filter")
-    pts = decision_points(p2cfg["phase1_runs"], p2cfg["verdicts"], int(p2cfg["max_points"]))
+    pts = decision_points(p2cfg["phase1_runs"], p2cfg["verdicts"], int(p2cfg["max_points"]),
+                          sample_ids=p2cfg.get("sample_ids"))
     rng = np.random.default_rng(int(cfg["seed"]))
     cands = {}
     for name in cfg["nudge_types"]:

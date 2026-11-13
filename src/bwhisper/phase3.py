@@ -80,7 +80,8 @@ def run_phase3_reference(ctx: Ctx, cfg: dict) -> dict:
         raise RuntimeError("parameter space signature mismatch: phase-2 candidates were computed on a different model/filter")
     rng = np.random.default_rng(int(cfg["seed"]))
 
-    pts = decision_points(p2cfg["phase1_runs"], p2cfg["verdicts"], int(p2cfg["max_points"]))
+    pts = decision_points(p2cfg["phase1_runs"], p2cfg["verdicts"], int(p2cfg["max_points"]),
+                          sample_ids=p2cfg.get("sample_ids"))
     p2_ids = {p["sample_id"] for p in pts}
     cands = {}
     for t in cfg["nudge_types"]:

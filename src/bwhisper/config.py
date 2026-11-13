@@ -62,7 +62,9 @@ def save_settings(patch: dict[str, Any]) -> dict[str, Any]:
 
 
 # Hyperparameters per phase. The UI renders its forms from these defaults and
-# every job stores the full resolved config next to its results.
+# every job stores the full resolved config next to its results. Ordinary
+# weight-voting Phase 2 is retained for old artifacts; current discovery uses
+# the component-level `phase2n` job.
 PHASE1_DEFAULTS: dict[str, Any] = {
     "model": None,  # None -> settings.model_active
     "devices": [],  # explicit CUDA devices -> one independent model replica per device

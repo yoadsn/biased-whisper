@@ -24,6 +24,8 @@ from . import budget as _bud  # noqa: F401
 from . import budget_device as _budget_device  # noqa: F401
 from . import phase2n as _p2n  # noqa: F401
 from . import setup_scale as _setup_scale  # noqa: F401
+from . import controller as _controller  # noqa: F401
+from . import phase4 as _phase4  # noqa: F401
 from .config import KNOWLEDGE_DIR, RUNS_DIR, WEB_DIR, ensure_dirs, load_settings, save_settings
 from .corpus import explore, hf_cache, store
 from .corpus import jobs as _corpus_jobs  # noqa: F401
@@ -195,6 +197,33 @@ def jobs_file(jid: str, name: str):
 
 
 # ---------------------------------------------------------------- phase specific
+@app.get("/api/phase4/{jid}/monitor")
+def phase4_monitor(jid: str):
+    from collections import deque
+
+    directory = _job_dir(jid)
+    job = json.loads((directory / "job.json").read_text())
+    if job["type"] != "phase4":
+        raise HTTPException(400, "not a Phase 4 run")
+    def tail(name, limit):
+        path = directory / name
+        if not path.exists():
+            return []
+        with path.open() as handle:
+            lines = deque(handle, maxlen=limit)
+        rows = []
+        for line in lines:
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass  # concurrent append may have an incomplete final line
+        return rows
+    path = directory / "monitor.json"
+    return {"monitor": json.loads(path.read_text()) if path.exists() else None,
+            "metrics": tail("metrics.jsonl", 500), "evaluations": tail("evaluations.jsonl", 100),
+            "checkpoints": tail("checkpoints.jsonl", 100)}
+
+
 @app.get("/api/test/runs/{jid}")
 def test_source(jid: str):
     try:
@@ -246,7 +275,7 @@ def test_audio_info(audio_id: str):
 @app.post("/api/test/transcribe")
 def test_submit(body: dict = Body(...)):
     try:
-        spec = interactive.source_spec(body.get("phase3_run"))
+        spec = interactive.source_spec(body.get("source_run") or body.get("phase3_run"))
         interactive.audio_dir(body.get("audio_id"))
         configs = interactive.validated_configs(spec, body.get("edit_configs", []))
         return manager().submit("test_transcribe", {

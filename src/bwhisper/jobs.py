@@ -5,6 +5,9 @@ The UI, the CLI and humans/agents all read the same files, so state is shared.
 from __future__ import annotations
 
 import json
+import os
+from contextlib import ExitStack, contextmanager
+import fcntl
 import secrets
 import threading
 import time
@@ -16,6 +19,41 @@ from typing import Any, Callable
 from .config import RUNS_DIR, ensure_dirs
 
 REGISTRY: dict[str, dict[str, Any]] = {}
+
+
+@contextmanager
+def gpu_reservation(job_type, config):
+    """Cross-process advisory leases shared by every harness GPU job."""
+    from .config import DATA, load_settings
+    from .model import pick_device
+
+    devices = config.get("devices") or []
+    if job_type == "phase4" and not config.get("parallel"):
+        devices = []
+    if not devices:
+        preferred = config.get("device") or load_settings()["device"]
+        if preferred == "auto":
+            preferred = load_settings()["device"]
+        device = pick_device(preferred)
+        devices = ["cuda:0" if device == "cuda" else device]
+    directory = DATA / "gpu_locks"
+    directory.mkdir(parents=True, exist_ok=True)
+    with ExitStack() as stack:
+        for device in sorted(set(devices)):
+            if not str(device).startswith("cuda"):
+                continue
+            # Map logical indices to physical visibility labels for cross-process leases.
+            index = int(str(device).split(":")[1]) if ":" in str(device) else 0
+            visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+            physical = visible.split(",")[index] if visible else str(index)
+            if not physical.replace("-", "").isalnum():
+                raise ValueError("invalid CUDA visibility label")
+            handle = stack.enter_context((directory / f"cuda-{physical}.lock").open("a"))
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise RuntimeError(f"GPU {device} is reserved by another harness job") from None
+        yield
 
 
 def register(name: str, kind: str = "gpu", defaults: dict | None = None):
@@ -127,7 +165,8 @@ class Manager:
         if type not in REGISTRY:
             raise KeyError(f"unknown job type {type!r}; known: {sorted(REGISTRY)}")
         cfg = {**REGISTRY[type]["defaults"], **(config or {})}
-        jid = f"{type}-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(2)}"
+        label = f"phase4-{cfg.get('target_style', 'cardinals')}" if type == "phase4" and cfg.get("target_style", "cardinals") in ("cardinals", "digits") else type
+        jid = f"{label}-{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(2)}"
         d = RUNS_DIR / jid
         d.mkdir(parents=True, exist_ok=True)
         j = Job(jid, type, cfg, d)
@@ -139,7 +178,10 @@ class Manager:
         ctx = Ctx(j)
         j.status, j.started = "running", time.time()
         j.save()
+        lease = ExitStack()
         try:
+            if REGISTRY[j.type]["kind"] == "gpu":
+                lease.enter_context(gpu_reservation(j.type, j.config))
             j.summary = REGISTRY[j.type]["fn"](ctx, j.config)
             j.status = "cancelled" if j.cancel_flag.is_set() else "done"
         except Cancelled:
@@ -161,6 +203,7 @@ class Manager:
                 j.status = "failed"
                 j.error = (j.error + "; " if j.error else "") + f"model cleanup failed: {e}"
                 ctx.log("CLEANUP FAILED\n" + traceback.format_exc())
+        lease.close()
         j.finished = time.time()
         j.save()
 

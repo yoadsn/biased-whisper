@@ -95,6 +95,14 @@ The owner also requested a [Test tab](/reference/interactive-test.md) for ≤30 
 microphone/upload audio, independent configurable edits plus baseline, using one
 cached CUDA model with exact rollback and fresh encoding under each edit.
 
+Owner review on 2026-11-07 changed the path: legacy weight-voting Phase 2 is
+abandoned for new discovery, while Phase 1's hard digit-family exclusion is a
+strong paired-decoding baseline, not a weight controller. Current UI/default
+discovery is component-level Phase 2N. Turbo Phase 1 (all 16,112 discovery
+samples, span mode) remains complete; the authorized rerun is Phase 2N,
+a discovery-only Phase 3 parity check, then Phase 3 on 50 recording-held-out
+samples if each phase's results are healthy.
+
 # Laptop status (2026-11-06, afternoon)
 
 | Item | State |
@@ -111,10 +119,10 @@ cached CUDA model with exact rollback and fresh encoding under each edit.
 
 # Next (ordered)
 
-1. Phase 3 refinements: fewer neurons (8/16/32) and a random-neuron control (same layers, same size), WER after number normalisation,
+1. Complete the owner-authorized turbo Phase 2N rerun: discovery-only Phase 3 parity benchmark, then 50-sample recording-held-out Phase 3 only if healthy; stop and report on failures/degeneration.
+2. Phase 3 refinements: fewer neurons (8/16/32) and a random-neuron control (same layers, same size), WER after number normalisation,
    value-correct verdicts, bootstrap confidence intervals, a held-out *episode* split for explore.
-3. Phase 2 (weights) with `all_no_embed` + `seq_contrast` + `sample_k` from the budget sweep; compare its candidates with Phase 2N units.
+3. ~~Phase 2 (weights) with `all_no_embed` + `seq_contrast` + `sample_k` from the budget sweep; compare its candidates with Phase 2N units.~~ Deprecated on 2026-11-07; use Phase 2N for new discovery.
 4. Style carry-over and prompt counterfactual experiments; activation patching of the layer 9-10 heads.
-5. Trivial baselines (digit-logit bias, prompting).
+5. Trivial baselines (hard digit-family exclusion is already Phase 1's paired decoding; compare prompting separately).
 6. Reverse cohort (natural word style -> digits) via inverse text normalisation.
-7. Larger ivrit.ai checkpoints on the server.

@@ -13,6 +13,12 @@ from these; `uv run bw job-types` prints them.
 
 # Phase 1
 
+For the independent LoRA path, see [Phase 4 configuration](/plan/phase-4-lora.md):
+1–3 epochs (default 1), rank 8 / alpha 16, decoder-only by default, optional
+top encoder layers, LR 1e-4, accumulation 8, 192-token teachers, rest-match 0.9,
+natural cardinal/no-number preservation enabled and strict numeric parser off.
+All runtime defaults are registered in `phase4.DEFAULTS` and shown in its UI form.
+
 | key | default | meaning |
 |---|---|---|
 | `model` | active model | HF id or local path |
@@ -126,7 +132,9 @@ Interactive `test_transcribe` deliberately differs from scientific jobs:
 `release_model_after_run=false` retains the restored baseline for later audio
 comparisons. Its model/statistic/candidate limit/token cap are pinned by the
 selected completed Phase 3 run; each `edit_configs` row specifies an edit name,
-finite strength and optional label. Baseline is always included, including an
+finite strength and optional label. The UI adds one row at strength 1 by default;
+add lower exploratory strengths explicitly rather than reusing the old 2/5/10/20
+weight-voting grid for Phase 2N gains. Baseline is always included, including an
 empty config list. CUDA is used when available. See the
 [Test reference](/reference/interactive-test.md).
 
@@ -134,7 +142,7 @@ empty config list. CUDA is used when available. See the
 |---|---|---|
 | `phase2_run` | - | run whose candidates are applied |
 | `nudge_types` | both | `to_digits`, `to_cardinal` |
-| `strengths` | 2, 5, 10, 20 | multipliers of the statistic (bitfit on small needs >= 5 to show an effect) |
+| `strengths` | 2, 5, 10, 20 | generic Phase 3 grid; for Phase 2N gain edits strength 1 changes selected output gains by 10%, while steering is calibrated near strength 1. Calibrate before reusing the old large grid |
 | `stat` | `mean_all` | `mean_all`, `mean_present`, `median_present` |
 | `candidate_limit` | null | keep top-N candidates by votes |
 | `eval_limit` | 50 | held-out utterances |

@@ -37,6 +37,8 @@ def run_dir(run_id):
 def source_spec(phase3_run):
     directory = run_dir(phase3_run)
     job = json.loads((directory / "job.json").read_text())
+    if job["type"] == "phase4":
+        return adapter_source_spec(phase3_run, directory, job)
     if job["type"] != "phase3" or job["status"] != "done":
         raise ValueError("select a completed Phase 3 run")
     cfg = job["config"]
@@ -74,7 +76,30 @@ def source_spec(phase3_run):
     return {"phase3_run": phase3_run, "phase2_run": cfg["phase2_run"], "model": model,
             "stat": stat, "candidate_limit": cfg.get("candidate_limit"), "edits": edits,
             "strengths": cfg["strengths"],
-            "max_new_tokens": int(cfg["max_new_tokens"]), "p2_config": p2cfg}
+             "max_new_tokens": int(cfg["max_new_tokens"]), "p2_config": p2cfg}
+
+
+def adapter_source_spec(run_id, directory, job):
+    model = job["config"].get("model") or (job.get("summary") or {}).get("model")
+    target_style = job["config"].get("target_style", "cardinals")
+    if not model:
+        raise ValueError("Phase 4 run has no recorded base model")
+    edits = []
+    for checkpoint in sorted(directory.iterdir()):
+        if (not checkpoint.is_dir() or checkpoint.is_symlink() or checkpoint.name.endswith(".partial") or
+                not (checkpoint / "adapter.json").is_file() or
+                not (checkpoint / "adapter.safetensors").is_file()):
+            continue
+        metadata = json.loads((checkpoint / "adapter.json").read_text())
+        if metadata.get("format") != "bwhisper-lora-v1" or metadata.get("model") != model:
+            continue
+        if metadata.get("target_style", metadata.get("training_config", {}).get("target_style", "cardinals")) != target_style:
+            raise ValueError("adapter/run target direction mismatch")
+        edits.append({"id": checkpoint.name, "params": 0, "metadata": metadata})
+    if not edits:
+        raise ValueError("this Phase 4 run has no complete saved adapters yet")
+    return {"phase3_run": run_id, "kind": "adapter", "model": model, "target_style": target_style, "stat": f"LoRA → {target_style}",
+            "edits": edits, "max_new_tokens": int(job["config"]["max_new_tokens"])}
 
 
 def audio_dir(audio_id):
@@ -124,8 +149,11 @@ def validated_configs(spec, configs):
         amount = row.get("strength")
         if isinstance(amount, bool) or not isinstance(amount, (int, float)) or not math.isfinite(amount):
             raise ValueError(f"edit config {i + 1}: strength must be a finite number")
+        if spec.get("kind") == "adapter" and amount != 1:
+            raise ValueError("saved adapters must be tested at their trained strength (1)")
+        label = f"{row['edit']} → {spec.get('target_style', 'cardinals')}" if spec.get("kind") == "adapter" else f"{row['edit']} × {amount}"
         result.append({"edit": row["edit"], "strength": float(amount),
-                       "label": str(row.get("label") or f"{row['edit']} × {amount}")[:120]})
+                       "label": str(row.get("label") or label)[:120]})
     return result
 
 
@@ -147,6 +175,8 @@ def transcribe(ctx: Ctx, cfg):
     device = "cuda:0" if torch.cuda.is_available() else M.pick_device("auto")
     L = M.load_model(spec["model"], device=device)
     M.unload_unused(L)
+    if spec.get("kind") == "adapter":
+        return transcribe_adapters(ctx, cfg, spec, configs, directory, L)
     p2cfg = spec["p2_config"]
     space = ParamSpace(L.model, p2cfg["param_filter"], p2cfg["include_regex"], p2cfg["exclude_regex"])
     p2dir = run_dir(spec["phase2_run"])
@@ -203,6 +233,49 @@ def transcribe(ctx: Ctx, cfg):
                "device": L.device, "stat": spec["stat"], "candidate_limit": spec["candidate_limit"],
                "max_new_tokens": spec["max_new_tokens"],
                "model_kept_loaded": not bool(cfg.get("release_model_after_run")), "results": rows}
+    ctx.write_json("summary.json", summary)
+    return summary
+
+
+def transcribe_adapters(ctx, cfg, spec, configs, directory, L):
+    from .audio import load_audio
+    from .lora import Adapter
+
+    audio = load_audio(directory / "audio.wav")
+    rows = []
+    choices = {edit["id"]: edit for edit in spec["edits"]}
+    conditions = [{"edit": None, "strength": 0., "label": "Base model (untouched)"}] + configs
+    for i, config in enumerate(conditions):
+        ctx.check()
+        ctx.progress(i, len(conditions), config["label"])
+        adapter, timing = None, {"edit_s": 0., "encoder_s": 0.}
+        training = L.model.training
+        try:
+            if config["edit"] is not None:
+                metadata = choices[config["edit"]]["metadata"]
+                adapter = Adapter(L.model, metadata["rank"], metadata["alpha"], metadata["dropout"],
+                                  metadata["modules"], metadata["encoder_top_layers"])
+                adapter.load(run_dir(spec["phase3_run"]) / config["edit"])
+            L.model.eval()
+            # Same unsuppressed decode as Phase 4 monitoring; every call freshly encodes.
+            with measured(timing, "decoder_s", L.device), torch.no_grad():
+                text, result = M.transcribe(L, audio, spec["max_new_tokens"])
+        finally:
+            try:
+                if adapter is not None:
+                    adapter.restore()
+                L.model.train(training)
+            except BaseException:
+                M.unload_all()
+                raise
+        row = {"index": i, **config, "text": text, "timings": timing, "target_style": spec["target_style"],
+               "truncated": not result.ended, "kind": "adapter"}
+        rows.append(row)
+        ctx.append_jsonl("results.jsonl", row)
+        ctx.progress(i + 1, len(conditions), config["label"])
+    summary = {"source_run": spec["phase3_run"], "target_style": spec["target_style"], "audio_id": cfg["audio_id"], "model": L.name,
+               "device": L.device, "results": rows, "suppression_at_evaluation": False,
+               "model_kept_loaded": not bool(cfg.get("release_model_after_run"))}
     ctx.write_json("summary.json", summary)
     return summary
 

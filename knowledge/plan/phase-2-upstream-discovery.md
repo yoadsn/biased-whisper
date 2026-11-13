@@ -1,13 +1,23 @@
 ---
 type: Plan
 title: Phase 2 - upstream discovery
-description: Compute per-decision-point nudges, keep top-% params, intersect across samples, vote over random groups against a permutation null, and select knobs by FDR.
-tags: [plan, phase2, gradients, statistics]
-status: stable
+description: Legacy per-weight discovery path, retained only to interpret old artifacts. New discovery uses component-level Phase 2N.
+tags: [plan, phase2, gradients, statistics, deprecated]
+status: deprecated
 generated: { by: claude-agent/claude-sonnet-5-5, at: 2026-11-06T09:35:00Z }
 ---
 
-# Pipeline (job `phase2`; `phase2.py`, `aggregate.py`, `paramspace.py`)
+# Legacy weight pipeline (job `phase2`; `phase2.py`, `aggregate.py`, `paramspace.py`)
+
+> **Deprecated for new experiments (2026-11-07).** Voting over individual weights
+> selects frequent/high-magnitude entries without directional coherence and the
+> final capped mean is not calibrated. It produced weak large-v3-turbo steering
+> (`+5.073 -> +4.482` probe contrast at strength 20). Use component-level
+> **Phase 2N** (`phase2n.py`, BH-FDR + effect-size ranking, coherent unit gain
+> edits) for new discovery and new Phase 3 candidate sources.
+> Phase 1 remains a paired-decoding baseline: in span mode the word-style output
+> is produced by hard exclusion of the digit-style token family, not a weight
+> controller.
 
 1. **Knob space.** `param_filter` preset (+ include/exclude regex) selects parameters; they are flattened in a stable order
    so a knob is `(module, index)` and a flat int.

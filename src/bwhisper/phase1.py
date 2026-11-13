@@ -153,6 +153,7 @@ def analyse_sample(L: M.Loaded, audio, max_new: int, style: StyleTokens | None =
     out: dict = {
         "baseline_text": text,
         "baseline_tokens": base.tokens,
+        "baseline_ended": base.ended,
         "mentions": count_mentions(text),
         "has_digits": False,
         "span_mode": style is not None,
@@ -329,13 +330,22 @@ def set_verdict(run_id: str, sample_id: int, verdict: str | None) -> dict:
     return v
 
 
-def decision_points(run_ids: list[str], accept: list[str], limit: int | None = None) -> list[dict]:
+def decision_points(run_ids: list[str], accept: list[str], limit: int | None = None,
+                    *, sample_ids: list[int] | None = None) -> list[dict]:
     """Phase-1 rows usable as Phase-2 decision points. A human verdict overrides the auto one:
     'human_good' is accepted, 'human_bad' rejected."""
+    selected = None
+    if sample_ids is not None:
+        if (not sample_ids or any(type(sid) is not int or sid <= 0 for sid in sample_ids) or
+                len(set(sample_ids)) != len(sample_ids)):
+            raise ValueError("sample_ids must be nonempty, distinct positive integers")
+        selected = set(sample_ids)
     pts = []
     for rid in run_ids:
         hv = load_verdicts(rid)
         for r in read_jsonl(RUNS_DIR / rid / "results.jsonl"):
+            if selected is not None and r["sample_id"] not in selected:
+                continue
             if not r.get("has_digits") or not r.get("cardinal_token"):
                 continue
             h = hv.get(r["sample_id"])
@@ -344,4 +354,6 @@ def decision_points(run_ids: list[str], accept: list[str], limit: int | None = N
                 r["effective_verdict"] = v
                 r["run_id"] = rid
                 pts.append(r)
+    if selected is not None and selected - {p["sample_id"] for p in pts}:
+        raise ValueError("some requested sample_ids do not have accepted Phase 1 decision points")
     return pts[:limit] if limit else pts

@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: Interactive Test tab and local audio comparisons
-description: Record or upload at most 30 seconds, compare an untouched baseline with any number of independent Phase 3 candidate edits, and reuse a single CUDA model with exact sparse rollback.
+description: Record or upload at most 30 seconds, compare an untouched baseline with independent Phase 3 edits or saved Phase 4 adapters, and restore the cached base after every comparison.
 tags: [reference, ui, interactive, phase3, inference, audio, cuda]
 status: stable
 generated: { by: opencode/gpt-6.1-sol, at: 2026-11-06T20:14:25Z }
@@ -9,14 +9,38 @@ generated: { by: opencode/gpt-6.1-sol, at: 2026-11-06T20:14:25Z }
 
 # User workflow
 
-The **Test** tab selects a completed Phase 3 run, then accepts microphone recording
+The **Test** tab selects a completed Phase 3 run or any Phase 4 run with complete
+saved checkpoints, then accepts microphone recording
 or an audio file (up to **30 seconds / 25 MB**). Add/remove any number of edit rows,
 each selecting an available candidate nudge type and a numeric strength, with an
-optional label. The untouched base model is always included. Rows are independent,
-not cumulative; duplicate edits/strengths are allowed. An empty row list performs
-baseline-only transcription. Zero is unchanged; negative strengths reverse an edit.
-Large strengths may degrade output; arbitrary amounts are exploratory, not validated
-operating points.
+optional label. New rows start at **strength 1**, an exploratory UI default,
+**not a universally safe operating scale**. Turbo residual steering at 1 has
+caused degeneration; 0.3 also fails to convert some years. Neuron/head gains
+need separate calibration (small's strongest neuron result used 10). See the
+[owner microphone audit](/findings/2026-11-07-microphone-nudge-audit.md).
+The untouched base model is always included. Rows
+are independent, not cumulative; duplicate edits/strengths are allowed. An empty row
+list performs baseline-only transcription. Zero is unchanged; negative strengths
+reverse an edit. Large strengths may degrade output; arbitrary amounts are
+exploratory, not validated operating points.
+
+For **Phase 4**, rows select saved adapter checkpoint directories rather than
+sparse edit types. Epoch and update checkpoints are available from any run,
+including failed/cancelled runs and immutable complete checkpoints in active runs.
+Partial directories are excluded. Adapters are loaded at their trained strength
+1 (not an arbitrary Phase 3 multiplier), independently; the base model comes
+from the saved run and checkpoint provenance must match. Each comparison includes
+the untouched base. The same unsuppressed decode as Phase 4 monitoring freshly
+encodes the audio for every checkpoint, including encoder LoRA. Adapter modules,
+parameter gradient flags and model training mode are restored on success/failure/
+cancellation before another test can reuse the cached base. Model loading and
+GPU inference remain queued jobs, not API-handler work.
+
+The source run label and LoRA badge explicitly show **→ digits** or **→ cardinals**.
+Direction comes from the run's `target_style` and is checked against each
+checkpoint's metadata; legacy runs default to cardinals. New Phase 4 run IDs also
+include direction. Comparison results retain it even when the owner supplies a
+custom row label.
 
 The candidate statistic (`mean_all`, etc.), candidate limit, model identity and
 token cap come from the selected Phase 3 run. Model identity resolves from that
@@ -62,11 +86,13 @@ localhost-only API/UI deployment is unchanged.
 
 # API and artifacts
 
-- `GET /api/test/runs/<phase3-run>`: model and edit metadata, no GPU loading.
+- `GET /api/test/runs/<phase3-or-phase4-run>`: model and edit/checkpoint metadata, no GPU loading.
 - `POST /api/test/audio?filename=...`: raw audio upload; returns id/duration/playback URL.
 - `GET /api/test/audio/<id>` and `/info`: normalized playback and metadata.
 - `POST /api/test/transcribe`: `{phase3_run, audio_id, edit_configs:[{edit,strength,label}]}`;
-  validates the selection and queues `test_transcribe`.
+  validates the selection and queues `test_transcribe`. `source_run` is accepted
+  as an alias for the legacy `phase3_run` field; either can identify a Phase 4 run.
+  For adapters, `edit` is a complete checkpoint directory name and `strength=1`.
 - `model_release`: normal registered job, exposed through the existing jobs API.
 
 Each comparison lives in `data/runs/test_transcribe-.../`, with `job.json`,
