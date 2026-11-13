@@ -53,6 +53,18 @@ the refined `start` / `duration` and records recording identity for held-out spl
 See [A40 server preparation](/reference/server-setup.md) for configuration, data
 shortfall reporting, setup-only preflight and the explicit phase execution gate.
 
+# Content axis: digits or Latin words
+
+All three importers take `content`: `digits` (default, the original digits experiment) or `latin` (the
+[Latin vs transliteration](/theory/latin-script-hypothesis.md) experiment; text must contain an `[A-Za-z]{2,}` run).
+
+* `corpus_fetch_explore`: `content` also accepts `saved` (the query stored with the cURL config); a non-empty `query`
+  regex overrides it. `latin` searches `[א-ת]\S* \S*[A-Za-z]{3,}\S* [א-ת]|[א-ת]-[A-Za-z]{3,}`, i.e. a Hebrew
+  sentence with an English word inside. The search term of a pasted cURL is always replaced by `{q}`.
+* `corpus_import_hf`, `corpus_import_pockettts`: `content` selects the windows/slices kept.
+* The store keeps `ref_digits` and `ref_latin` per sample (older databases are migrated and backfilled on first open);
+  the Corpus tab filters and shows both.
+
 # Caveats
 
 * Reference digit usage differs by source; the model inherits that inconsistency.

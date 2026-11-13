@@ -2,6 +2,7 @@
 
 ## 2026-11-13
 
+* Corpus tab/API/importers now support the Latin axis: `content: digits|latin` on explore fetch, HF-cache and PocketTTS imports, `ref_latin` column with migration, Latin filter/column/highlight in the UI; pasted cURL search terms are always templated to `{q}` (a literal term used to be fetched for every job). See `/reference/corpus-sources.md`.
 * Latin-vs-transliteration axis: job `phase1_latin` + `latin_script.py` + tests. With a refreshed explore cookie fetched 300 Hebrew+Latin clips (regex query) and ran turbo Phase 1 on 332 clips on the laptop: 66/73 short English words and 92/127 acronyms convert to Hebrew spellings; phrases do not. Heuristic verdicts, one checkpoint. See `/theory/latin-script-hypothesis.md`, `/findings/2026-11-13-latin-phase1-poc.md`.
 * Deployed the baked preset/microphone/drag-drop UI image to Cloud Run revision `biased-whisper-l4-00002-pmq`; readiness and IAM/IAP policy verified, no proxy left running. Local fake-model browser preset flow, 70 targeted tests and real WebM decode passed. See `/findings/2026-11-13-cloud-run-lora-demo.md`.
 * Added microphone recording, drag/drop uploads and 20 reproducibly randomized local corpus presets to the Cloud Run demo; preset audio remains gitignored and is baked into the next image. See `/findings/2026-11-13-cloud-run-lora-demo.md`.

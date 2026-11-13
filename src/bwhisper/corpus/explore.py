@@ -54,6 +54,30 @@ DEFAULT_CFG: dict[str, Any] = {
 }
 
 
+# Search regexes per experiment axis. "latin" asks for a Hebrew word next to a Latin word, or a prefixed Latin
+# word (ה-Facebook), so clips are Hebrew sentences with an English word inside rather than all-English audio.
+QUERY_PRESETS = {
+    "digits": r"\d",
+    "latin": r"[א-ת]\S* \S*[A-Za-z]{3,}\S* [א-ת]|[א-ת]-[A-Za-z]{3,}",
+}
+
+
+def search_query(content: str, override: str = "") -> str | None:
+    """Regex for one fetch: explicit override, else the preset for `content`, else None = saved config query."""
+    if override.strip():
+        return override.strip()
+    if content == "saved":
+        return None
+    if content not in QUERY_PRESETS:
+        raise ValueError(f"content must be one of {sorted(QUERY_PRESETS) + ['saved']}, got {content!r}")
+    return QUERY_PRESETS[content]
+
+
+def template_search_url(url: str) -> str:
+    """Make the q= parameter a {q} placeholder; a copied cURL carries whatever the user last searched for."""
+    return re.sub(r"([?&])q=(?!\{q\})[^&]*", r"\1q={q}", url) if url else url
+
+
 class ServerStatusError(RuntimeError):
     def __init__(self, status_code: int, message: str, fatal: bool = False):
         super().__init__(message)
@@ -132,7 +156,7 @@ def import_curl(search_curl: str, audio_curl: str | None = None) -> dict:
         u = urlparse(s["url"])
         qs = dict(parse_qsl(u.query))
         for k, v in list(qs.items()):
-            if v == r"\d" or v == "\\d":
+            if k in ("q", "query") or v == r"\d" or v == "\\d":
                 qs[k] = "{q}"
             elif k in ("mode",):
                 qs[k] = "{mode}"
@@ -525,13 +549,16 @@ def fetch_episodes_batch(
     progress: Callable[[int, int], None] = lambda a, b: None,
     max_pages: int = 40,
     episode_counts: dict[str, int] | None = None,
+    query: str | None = None,
 ) -> dict[str, Any]:
-    """Page through explore.ivrit.ai search results for `seed`, grouping by episode and
+    """Page through explore.ivrit.ai search results for `seed` (search regex `query`, default the saved one), grouping by episode and
     running up to `workers` parallel episode workers (each with a persistent keep-alive
     httpx.Client) using either `mode='range'` or `mode='episode'`."""
     cfg = load_cfg()
+    if query:
+        cfg["query"] = query
     base = load_settings()["explore_base_url"].rstrip("/")
-    search_tpl = (
+    search_tpl = template_search_url(
         cfg.get("search_url")
         or f"{base}/api/search?q={{q}}&mode={{mode}}&page={{page1}}&per_page={{limit}}&shuffle=true&seed={{seed}}"
     )

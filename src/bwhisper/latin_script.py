@@ -11,6 +11,20 @@ import re
 from difflib import SequenceMatcher
 
 LATIN_RE = re.compile(r"[A-Za-z]")
+LATIN_RUN_RE = re.compile(r"[A-Za-z]{2,}")
+# What a corpus sample must contain to be useful for each experiment axis.
+CONTENT_PATTERNS = {"digits": re.compile(r"\d"), "latin": LATIN_RUN_RE}
+
+
+def content_pattern(content: str) -> "re.Pattern[str]":
+    try:
+        return CONTENT_PATTERNS[content]
+    except KeyError:
+        raise ValueError(f"content must be one of {sorted(CONTENT_PATTERNS)}, got {content!r}") from None
+
+
+def latin_run_count(text: str) -> int:
+    return len(LATIN_RUN_RE.findall(text))
 LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9'.\-]*")
 HEBREW_RE = re.compile(r"[א-ת]")
 HEBREW_PREFIXES = "והבכלמש"

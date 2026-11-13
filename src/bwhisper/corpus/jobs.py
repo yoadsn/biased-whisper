@@ -15,6 +15,8 @@ EXPLORE_FETCH_DEFAULTS = {
     "pad": 0.25,
     "mode": "range",
     "workers": 4,
+    "content": "digits",  # digits | latin | saved (use the query stored in the explore config)
+    "query": "",  # optional search regex; overrides content
 }
 
 
@@ -24,12 +26,13 @@ def import_pockettts(ctx: Ctx, cfg: dict) -> dict:
 
 
 @register("corpus_import_hf", kind="io",
-          defaults={"dataset": None, "limit": 100, "seed": 0, "min_dur": 6.0, "max_dur": 25.0})
+          defaults={"dataset": None, "limit": 100, "seed": 0, "min_dur": 6.0, "max_dur": 25.0,
+                    "content": "digits"})  # digits | latin
 def import_hf(ctx: Ctx, cfg: dict) -> dict:
     return hf_cache.import_from_cache(
         dataset=cfg.get("dataset"), limit=int(cfg["limit"]), seed=int(cfg["seed"]),
         min_dur=float(cfg["min_dur"]), max_dur=float(cfg["max_dur"]),
-        log=ctx.log, should_stop=ctx.should_stop, progress=ctx.progress,
+        content=cfg.get("content", "digits"), log=ctx.log, should_stop=ctx.should_stop, progress=ctx.progress,
     )
 
 
@@ -52,6 +55,7 @@ def fetch_explore(ctx: Ctx, cfg: dict) -> dict:
     pad = float(cfg.get("pad", 0.25))
     mode = str(cfg.get("mode") or "range")
     workers = max(1, int(cfg.get("workers", 4)))
+    query = explore.search_query(cfg.get("content", "digits"), cfg.get("query") or "")
 
     rng = random.Random(base_seeds[-1])
     seed_queue = list(base_seeds)
@@ -86,6 +90,7 @@ def fetch_explore(ctx: Ctx, cfg: dict) -> dict:
             mode=mode,
             workers=workers,
             episode_counts=episode_counts,
+            query=query,
             log=ctx.log,
             should_stop=ctx.should_stop,
             progress=lambda a, _b, bd=base_done, s=seed: ctx.progress(

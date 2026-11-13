@@ -24,6 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--dataset", default=None)
     c.add_argument("--limit", type=int, default=100)
     c.add_argument("--seed", type=int, default=0)
+    c.add_argument("--content", choices=["digits", "latin"], default="digits")
 
     r = sub.add_parser("run", help="run a job synchronously")
     r.add_argument("type")
@@ -43,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     from .jobs import REGISTRY, manager
 
     if a.cmd == "corpus-import":
-        j = manager().run_sync("corpus_import_hf", {"dataset": a.dataset, "limit": a.limit, "seed": a.seed})
+        j = manager().run_sync("corpus_import_hf", {"dataset": a.dataset, "limit": a.limit, "seed": a.seed, "content": a.content})
     elif a.cmd == "run":
         j = manager().run_sync(a.type, json.loads(a.config))
     elif a.cmd == "jobs":

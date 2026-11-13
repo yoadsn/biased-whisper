@@ -1,4 +1,4 @@
-"""Import original-text digit examples using PocketTTS aligned audio slices."""
+"""Import original-text examples (digits or Latin words) using PocketTTS aligned audio slices."""
 from __future__ import annotations
 
 import hashlib
@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from ..audio import crop_to_wav
+from ..latin_script import content_pattern
 from ..jobs import Ctx
 from . import store
 
@@ -25,6 +26,7 @@ DEFAULTS = {
     "min_dur": 1.5,
     "max_dur": 28.0,
     "workers": 8,
+    "content": "digits",  # digits | latin: what the original text must contain
 }
 
 
@@ -70,11 +72,12 @@ def original_text(row: dict, dataset: str, originals: dict[str, str] | None = No
 
 
 def candidate(row: dict, dataset: str, manifest: Path, line: int,
-              min_dur: float, max_dur: float, originals: dict[str, str] | None = None) -> dict | None:
+              min_dur: float, max_dur: float, originals: dict[str, str] | None = None,
+              content: str = "digits") -> dict | None:
     if not isinstance(row, dict) or row.get("alignment_error"):
         return None
     text, text_origin = original_text(row, dataset, originals)
-    if not isinstance(text, str) or not any(c.isdigit() for c in text) or not re.search(r"[א-ת]", text):
+    if not isinstance(text, str) or not content_pattern(content).search(text) or not re.search(r"[א-ת]", text):
         return None
     try:
         start, duration = float(row["start"]), float(row["duration"])
@@ -103,6 +106,8 @@ def candidate(row: dict, dataset: str, manifest: Path, line: int,
 
 
 def import_aligned(ctx: Ctx, cfg: dict) -> dict:
+    content = cfg.get("content", "digits")
+    content_pattern(content)  # validates
     sources = list(cfg["sources"])
     splits = list(cfg["splits"])
     limit, seed = int(cfg["limit"]), int(cfg["seed"])
@@ -132,11 +137,11 @@ def import_aligned(ctx: Ctx, cfg: dict) -> dict:
             for line, raw in enumerate(f, 1):
                 if line % 10000 == 0:
                     ctx.check()
-                    ctx.progress(0, limit, f"scanning {dataset}: {line:,} rows; {eligible[dataset]:,} digit candidates")
+                    ctx.progress(0, limit, f"scanning {dataset}: {line:,} rows; {eligible[dataset]:,} {content} candidates")
                 counts[f"{dataset}:rows"] += 1
                 try:
                     row = json.loads(raw)
-                    c = candidate(row, dataset, manifest, line, float(cfg["min_dur"]), float(cfg["max_dur"]), originals)
+                    c = candidate(row, dataset, manifest, line, float(cfg["min_dur"]), float(cfg["max_dur"]), originals, content)
                 except (ValueError, TypeError):
                     counts[f"{dataset}:invalid"] += 1
                     continue
@@ -164,7 +169,7 @@ def import_aligned(ctx: Ctx, cfg: dict) -> dict:
                     if j < capacity:
                         pool[j] = c
         store.update_references(repairs)
-        ctx.log(f"{dataset}: {eligible[dataset]:,} eligible original-text digit slices so far")
+        ctx.log(f"{dataset}: {eligible[dataset]:,} eligible original-text {content} slices so far")
     for pool in pools.values():
         rng.shuffle(pool)
 

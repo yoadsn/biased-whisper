@@ -96,7 +96,7 @@ function app() {
     settings: {}, device: '', jobs: [], jobTypes: {}, cfgs: {}, OPTIONS, HELP,
     toast: '',
     // corpus
-    corpus: { items: [], total: 0, stats: { sources: [], total: 0 }, q: '', source: '', digitsOnly: false, offset: 0, limit: 30, sel: null, hf: [], explore: null, curlSearch: '', curlAudio: '', probe: null, order: 'id', metaById: {} },
+    corpus: { items: [], total: 0, stats: { sources: [], total: 0 }, q: '', source: '', digitsOnly: false, latinOnly: false, offset: 0, limit: 30, sel: null, hf: [], explore: null, curlSearch: '', curlAudio: '', probe: null, order: 'id', metaById: {} },
     // phase 1
     p1: { run: '', rows: [], total: 0, verdicts: {}, filter: '', sel: null, usable: null },
     p15: { run: '', summary: null, unitSrc: 'model_baseline' },
@@ -224,7 +224,7 @@ function app() {
     async loadCorpus(reset = false) {
       if (reset) this.corpus.offset = 0;
       const c = this.corpus;
-      const qs = new URLSearchParams({ q: c.q, source: c.source, digits_only: c.digitsOnly, limit: c.limit, offset: c.offset, order: c.order });
+      const qs = new URLSearchParams({ q: c.q, source: c.source, digits_only: c.digitsOnly, latin_only: c.latinOnly, limit: c.limit, offset: c.offset, order: c.order });
       const r = await this.api('/api/corpus?' + qs);
       c.items = r.items; c.total = r.total;
       c.stats = await this.api('/api/corpus/stats');
@@ -273,6 +273,7 @@ function app() {
       this.p1.verdicts = await this.api(`/api/phase1/${this.p1.run}/verdicts`);
     },
     hlDigits(t) { return esc(t).replace(/(\S*\d\S*)/g, '<mark class="dig">$1</mark>'); },
+    hlText(t) { return esc(t).replace(/(\S*(?:\d|[A-Za-z]{2,})\S*)/g, '<mark class="dig">$1</mark>'); },
     hlWords(t, spans) {
       const set = new Set((spans || []).flatMap(s => s.number_words || []));
       return esc(t).split(/(\s+)/).map(w => (set.has(w) ? `<mark class="word">${w}</mark>` : w)).join('');

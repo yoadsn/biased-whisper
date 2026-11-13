@@ -74,11 +74,12 @@ def job_types():
 # ---------------------------------------------------------------- corpus
 @app.get("/api/corpus")
 def corpus_list(source: str | None = None, q: str | None = None, digits_only: bool = False,
-                limit: int = 50, offset: int = 0, order: str = "id"):
-    rows = store.query(source=source or None, q=q or None, digits_only=digits_only, limit=limit, offset=offset, order=order)
+                latin_only: bool = False, limit: int = 50, offset: int = 0, order: str = "id"):
+    rows = store.query(source=source or None, q=q or None, digits_only=digits_only, latin_only=latin_only,
+                       limit=limit, offset=offset, order=order)
     for r in rows:
         r.pop("meta", None)
-    return {"items": rows, "total": store.count(source or None, digits_only)}
+    return {"items": rows, "total": store.count(source or None, digits_only, latin_only)}
 
 
 @app.get("/api/corpus/stats")

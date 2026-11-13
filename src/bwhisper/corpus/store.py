@@ -10,6 +10,7 @@ from typing import Any
 
 from ..config import AUDIO_DIR, CORPUS_DIR, ensure_dirs
 from ..hebrew_numbers import digit_chars
+from ..latin_script import latin_run_count
 
 DB_PATH = CORPUS_DIR / "corpus.db"
 _local = threading.local()
@@ -24,6 +25,7 @@ CREATE TABLE IF NOT EXISTS samples (
   audio_path TEXT,
   start REAL, end REAL,
   ref_digits INTEGER DEFAULT 0,
+  ref_latin INTEGER DEFAULT 0,
   meta TEXT DEFAULT '{}',
   batch TEXT,
   created REAL,
@@ -41,8 +43,23 @@ def conn() -> sqlite3.Connection:
         c = sqlite3.connect(DB_PATH, timeout=30)
         c.row_factory = sqlite3.Row
         c.executescript(SCHEMA)
+        _migrate(c)
         _local.c = c
     return c
+
+
+def _migrate(c: sqlite3.Connection) -> None:
+    """Databases created before the Latin axis lack ref_latin; add and backfill it once."""
+    if "ref_latin" not in {r[1] for r in c.execute("PRAGMA table_info(samples)")}:
+        try:
+            with c:
+                c.execute("ALTER TABLE samples ADD COLUMN ref_latin INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:  # another process migrated first
+            pass
+        rows = c.execute("SELECT id, text FROM samples").fetchall()
+        with c:
+            c.executemany("UPDATE samples SET ref_latin=? WHERE id=?", [(latin_run_count(t), i) for i, t in rows])
+    c.execute("CREATE INDEX IF NOT EXISTS idx_samples_latin ON samples(ref_latin)")
 
 
 def _row(r: sqlite3.Row) -> dict[str, Any]:
@@ -67,9 +84,9 @@ def add_sample(
     try:
         with c:
             cur = c.execute(
-                "INSERT INTO samples(source,source_key,text,duration,audio_path,start,end,ref_digits,meta,batch,created)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (source, source_key, text, duration, str(audio_path), start, end, digit_chars(text),
+                "INSERT INTO samples(source,source_key,text,duration,audio_path,start,end,ref_digits,ref_latin,meta,batch,created)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (source, source_key, text, duration, str(audio_path), start, end, digit_chars(text), latin_run_count(text),
                  json.dumps(meta or {}, ensure_ascii=False), batch, time.time()),
             )
         return cur.lastrowid
@@ -95,6 +112,7 @@ def query(
     ids: list[int] | None = None,
     order: str = "id",
     exclude_ids: list[int] | None = None,
+    latin_only: bool = False,
 ) -> list[dict]:
     where, args = [], []
     if source:
@@ -103,6 +121,8 @@ def query(
         where.append("text LIKE ?"); args.append(f"%{q}%")
     if digits_only:
         where.append("ref_digits>0")
+    if latin_only:
+        where.append("ref_latin>0")
     if ids:
         where.append(f"id IN ({','.join('?' * len(ids))})"); args += ids
     if exclude_ids:
@@ -115,25 +135,28 @@ def query(
     return [_row(r) for r in conn().execute(sql, args).fetchall()]
 
 
-def count(source: str | None = None, digits_only: bool = False) -> int:
+def count(source: str | None = None, digits_only: bool = False, latin_only: bool = False) -> int:
     sql, args = "SELECT COUNT(*) FROM samples WHERE 1=1", []
     if source:
         sql += " AND source=?"; args.append(source)
     if digits_only:
         sql += " AND ref_digits>0"
+    if latin_only:
+        sql += " AND ref_latin>0"
     return conn().execute(sql, args).fetchone()[0]
 
 
 def stats() -> dict:
     rows = conn().execute(
-        "SELECT source, COUNT(*) n, SUM(ref_digits>0) with_digits, SUM(duration) secs FROM samples GROUP BY source"
+        "SELECT source, COUNT(*) n, SUM(ref_digits>0) with_digits, SUM(ref_latin>0) with_latin, SUM(duration) secs FROM samples GROUP BY source"
     ).fetchall()
     return {"sources": [dict(r) for r in rows], "total": count()}
 
 
 def update_text(sample_id: int, text: str) -> None:
     c = conn()
-    c.execute("UPDATE samples SET text=?, ref_digits=? WHERE id=?", (text, digit_chars(text), sample_id))
+    c.execute("UPDATE samples SET text=?, ref_digits=?, ref_latin=? WHERE id=?",
+              (text, digit_chars(text), latin_run_count(text), sample_id))
     c.commit()
 
 
@@ -142,10 +165,10 @@ def update_references(updates: list[tuple[int, str, dict]]) -> None:
     if not updates:
         return
     c = conn()
-    values = [(text, digit_chars(text), json.dumps(meta, ensure_ascii=False), sample_id)
+    values = [(text, digit_chars(text), latin_run_count(text), json.dumps(meta, ensure_ascii=False), sample_id)
               for sample_id, text, meta in updates]
     with c:
-        c.executemany("UPDATE samples SET text=?, ref_digits=?, meta=? WHERE id=?", values)
+        c.executemany("UPDATE samples SET text=?, ref_digits=?, ref_latin=?, meta=? WHERE id=?", values)
 
 
 def delete(sample_ids: list[int]) -> int:

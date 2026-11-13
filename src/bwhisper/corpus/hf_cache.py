@@ -2,7 +2,7 @@
 
 Each dataset entry has ``audio.m4a`` + ``transcript.aligned.json`` (timed
 segments). We build utterance windows (merged adjacent segments, <= max_dur)
-around segments containing digits and crop them to 16 kHz wav.
+around segments containing digits (or Latin words) and crop them to 16 kHz wav.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..audio import crop_to_wav
-from ..hebrew_numbers import DIGIT_RE
+from ..latin_script import content_pattern
 from . import store
 
 HF_HUB = Path.home() / ".cache" / "huggingface" / "hub"
@@ -30,12 +30,14 @@ def list_datasets() -> list[dict]:
     return out
 
 
-def build_windows(segments: list[dict], min_dur: float, max_dur: float) -> list[tuple[int, int]]:
-    """Index ranges [i, j] of segments, each containing >=1 digit segment, non-overlapping."""
+def build_windows(segments: list[dict], min_dur: float, max_dur: float,
+                  content: str = "digits") -> list[tuple[int, int]]:
+    """Index ranges [i, j] of segments, each containing >=1 matching segment, non-overlapping."""
+    pattern = content_pattern(content)
     used = [False] * len(segments)
     wins = []
     for i, s in enumerate(segments):
-        if used[i] or not DIGIT_RE.search(s.get("text", "")):
+        if used[i] or not pattern.search(s.get("text", "")):
             continue
         a = b = i
         while True:
@@ -64,10 +66,12 @@ def import_from_cache(
     seed: int = 0,
     min_dur: float = 6.0,
     max_dur: float = 25.0,
+    content: str = "digits",
     log: Callable[[str], None] = print,
     should_stop: Callable[[], bool] = lambda: False,
     progress: Callable[[int, int], None] = lambda a, b: None,
 ) -> dict:
+    content_pattern(content)  # validates
     rng = random.Random(seed)
     dsets = [d for d in list_datasets() if dataset in (None, "", d["name"])]
     entries: list[Path] = []
@@ -85,7 +89,7 @@ def import_from_cache(
             continue
         segs = json.loads((e / "transcript.aligned.json").read_text()).get("segments", [])
         segs = [s for s in segs if s.get("end") is not None and s.get("text")]
-        wins = build_windows(segs, min_dur, max_dur)
+        wins = build_windows(segs, min_dur, max_dur, content)
         rng.shuffle(wins)
         dset = e.parent.parent.parent.name.removeprefix("datasets--").replace("--", "/")
         for a, b in wins:
