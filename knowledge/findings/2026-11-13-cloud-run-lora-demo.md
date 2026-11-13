@@ -35,3 +35,17 @@ See `deploy/README.md` for the local amd64 build and personal-account Cloud
 Run commands. The service is intentionally IAM-private and limits itself to
 30-second clips; longer files would otherwise be silently truncated by the
 Whisper feature extractor. No model weights or adapters are version-controlled.
+
+# Deployment verification
+
+On 2026-11-13, the local amd64 image was built and pushed to Artifact Registry
+as `hebrew-tts/biased-whisper-l4:20261113`, digest
+`sha256:ddc34bd9084e745b3ab6fc7724bec3c26f314dc5ef9e0d560af095a717fe10eb`.
+Cloud Run revision `biased-whisper-l4-00001-j9h` is ready in `europe-west1`
+with one L4, 4 CPU, 16 GiB, concurrency 1, min instances 0 and IAM-only
+invocation. `/ready` reports digits step 1269 and cardinals step 1681.
+Authenticated requests for a 2.2-second existing Explore speech clip returned
+`אנחנו ב-1850.` at -100 and midpoint, versus
+`אנחנו באלף שמונה מאות חמישים.` at +100. This is a functional smoke test,
+not an accuracy evaluation. The HTML UI loaded through the authenticated
+Cloud Run proxy, with its slider, upload and submit controls visible.

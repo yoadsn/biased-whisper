@@ -47,3 +47,8 @@ Use `gcloud run services proxy biased-whisper-l4 --account=yoadsn@gmail.com
 and open <http://localhost:8080/>. Private-by-default is deliberate: making
 GPU inference publicly callable can incur unbounded charges. Minimum instances
 zero allows scale-to-zero; the first request can have a long cold start.
+
+Deployed revision `biased-whisper-l4-00001-j9h` is ready at
+<https://biased-whisper-l4-que2njye2q-ew.a.run.app> (IAM authentication
+required). The image was pushed with digest
+`sha256:ddc34bd9084e745b3ab6fc7724bec3c26f314dc5ef9e0d560af095a717fe10eb`.
